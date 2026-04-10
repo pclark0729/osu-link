@@ -7,10 +7,12 @@ import {
 } from "./collectionShare";
 import {
   DEFAULT_PARTY_WS_URL,
+  PARTY_SERVER_URL_UI_HIDDEN,
   PUBLIC_PARTY_WS_URL,
   defaultPartyWsUrlFromSettings,
 } from "./constants";
 import { OnboardingFlow } from "./OnboardingFlow";
+import { buildPartyConnectUrlCandidates } from "./party/partyConnectUrls";
 import { PartyClient, type PartyClientState } from "./party/partyClient";
 import { PartyPanel } from "./PartyPanel";
 import { NeuSelect } from "./NeuSelect";
@@ -281,8 +283,9 @@ export default function App() {
   );
   const [partyDisplayName, setPartyDisplayName] = useState("");
   const [joinCodeDraft, setJoinCodeDraft] = useState("");
-  const [localPartyBusy, setLocalPartyBusy] = useState(false);
   const partyClientRef = useRef<PartyClient | null>(null);
+  /** When true, user chose Disconnect and we skip auto-connect until they Connect again. */
+  const partyUserPrefersOfflineRef = useRef(false);
   const pushToastRef = useRef<(tone: Toast["tone"], message: string) => void>(() => {});
   const partyImportChain = useRef(Promise.resolve());
 
@@ -389,7 +392,6 @@ export default function App() {
     void (async () => {
       try {
         const s = await invoke<Settings>("get_settings");
-        const partyUrl = defaultPartyWsUrlFromSettings(s.partyServerUrl);
         setSettings({
           clientId: s.clientId ?? "",
           clientSecret: s.clientSecret ?? "",
@@ -397,8 +399,9 @@ export default function App() {
           onboardingCompleted: s.onboardingCompleted !== false,
           partyServerUrl: s.partyServerUrl ?? null,
         });
-        partyClientRef.current?.setUrl(partyUrl);
-        setPartyState((prev) => ({ ...prev, url: partyUrl }));
+        const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
+        partyClientRef.current?.setUrl(urls[0]);
+        setPartyState((prev) => ({ ...prev, url: urls[0] }));
       } catch {
         /* ignore */
       }
@@ -414,6 +417,19 @@ export default function App() {
       setBootReady(true);
     })();
   }, [refreshAuth, refreshPaths]);
+
+  useEffect(() => {
+    if (!bootReady || !PARTY_SERVER_URL_UI_HIDDEN) return;
+    if (partyUserPrefersOfflineRef.current) return;
+    const urls = buildPartyConnectUrlCandidates(settings.partyServerUrl);
+    const c = partyClientRef.current;
+    if (!c) return;
+    c.setUrl(urls[0]);
+    const st = c.getState();
+    if (st.connection === "disconnected" || st.connection === "error") {
+      c.connect(undefined, urls);
+    }
+  }, [bootReady, settings.partyServerUrl]);
 
   const openSetupGuide = async () => {
     setSettingsMsg(null);
@@ -614,53 +630,18 @@ export default function App() {
       c?.disconnect();
       c?.setUrl(pub);
       setPartyState((prev) => ({ ...prev, url: pub }));
+      if (PARTY_SERVER_URL_UI_HIDDEN) {
+        partyUserPrefersOfflineRef.current = false;
+        c?.connect(undefined, buildPartyConnectUrlCandidates(pub));
+      }
       pushToast(
         "success",
-        "Using the online party server. Click Connect, then create a lobby and share the code with friends anywhere.",
+        PARTY_SERVER_URL_UI_HIDDEN
+          ? "Using the online party server. Create or join a lobby and share the code."
+          : "Using the online party server. Click Connect, then create a lobby and share the code with friends anywhere.",
       );
     } catch (e) {
       pushToast("error", String(e));
-    }
-  };
-
-  const createLocalParty = async () => {
-    if (!isTauri()) {
-      pushToast("error", "Local party server only runs in the desktop app.");
-      return;
-    }
-    setLocalPartyBusy(true);
-    try {
-      const port = await invoke<number>("party_embedded_server_start");
-      const url = `ws://127.0.0.1:${port}`;
-      const nextSettings: Settings = { ...settings, partyServerUrl: url };
-      await invoke("save_settings_cmd", {
-        s: {
-          clientId: nextSettings.clientId.trim(),
-          clientSecret: nextSettings.clientSecret.trim(),
-          beatmapDirectory:
-            nextSettings.beatmapDirectory && nextSettings.beatmapDirectory.trim() !== ""
-              ? nextSettings.beatmapDirectory.trim()
-              : null,
-          onboardingCompleted: nextSettings.onboardingCompleted,
-          partyServerUrl: url,
-        },
-      });
-      setSettings(nextSettings);
-      const c = partyClientRef.current;
-      c?.disconnect();
-      c?.setUrl(url);
-      setPartyState((prev) => ({ ...prev, url }));
-      c?.connect(() => {
-        partyClientRef.current?.createLobby(partyDisplayName.trim() || "Host");
-      });
-      pushToast(
-        "success",
-        `Party server is running on this PC (${url}). Your lobby code appears below (same computer only). For friends online, deploy party-server and use Settings or “Use online server”.`,
-      );
-    } catch (e) {
-      pushToast("error", String(e));
-    } finally {
-      setLocalPartyBusy(false);
     }
   };
 
@@ -1013,22 +994,23 @@ export default function App() {
             displayName={partyDisplayName}
             joinCodeDraft={joinCodeDraft}
             partyUrlDraft={settings.partyServerUrl ?? ""}
-            desktop={isTauri()}
-            localPartyBusy={localPartyBusy}
             onDisplayNameChange={setPartyDisplayName}
             onJoinCodeChange={setJoinCodeDraft}
             onPartyUrlChange={(v) =>
               setSettings((s) => ({ ...s, partyServerUrl: v.trim() === "" ? null : v.trim() }))
             }
-            onCreateLocalParty={() => void createLocalParty()}
             publicPartyUrl={PUBLIC_PARTY_WS_URL}
             onUsePublicPartyServer={() => void usePublicPartyServer()}
             onConnect={() => {
-              const u = defaultPartyWsUrlFromSettings(settings.partyServerUrl);
-              partyClientRef.current?.setUrl(u);
-              partyClientRef.current?.connect();
+              partyUserPrefersOfflineRef.current = false;
+              const urls = buildPartyConnectUrlCandidates(settings.partyServerUrl);
+              partyClientRef.current?.setUrl(urls[0]);
+              partyClientRef.current?.connect(undefined, urls);
             }}
-            onDisconnect={() => partyClientRef.current?.disconnect()}
+            onDisconnect={() => {
+              partyUserPrefersOfflineRef.current = true;
+              partyClientRef.current?.disconnect();
+            }}
             onCreateLobby={() => partyClientRef.current?.createLobby(partyDisplayName)}
             onJoinLobby={() => partyClientRef.current?.joinLobby(joinCodeDraft, partyDisplayName)}
             onLeaveLobby={() => partyClientRef.current?.leaveLobby()}
@@ -1094,21 +1076,23 @@ export default function App() {
                 }
               />
             </label>
-            <label className="field" style={{ marginTop: "0.75rem" }}>
-              <span>Party server WebSocket URL (optional)</span>
-              <input
-                type="text"
-                autoComplete="off"
-                placeholder={PUBLIC_PARTY_WS_URL ?? DEFAULT_PARTY_WS_URL}
-                value={settings.partyServerUrl ?? ""}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    partyServerUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
-                  })
-                }
-              />
-            </label>
+            {!PARTY_SERVER_URL_UI_HIDDEN && (
+              <label className="field" style={{ marginTop: "0.75rem" }}>
+                <span>Party server WebSocket URL (optional)</span>
+                <input
+                  type="text"
+                  autoComplete="off"
+                  placeholder={PUBLIC_PARTY_WS_URL ?? DEFAULT_PARTY_WS_URL}
+                  value={settings.partyServerUrl ?? ""}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      partyServerUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                    })
+                  }
+                />
+              </label>
+            )}
             <p className="hint">Resolved folder: {resolvedSongs || "—"}</p>
             <div className="row-actions">
               <button type="button" className="primary" onClick={() => void saveSettings()}>

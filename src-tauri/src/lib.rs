@@ -2,7 +2,6 @@ mod collections;
 mod import;
 mod oauth;
 mod osu_api;
-mod party_embedded;
 mod paths;
 mod settings;
 
@@ -141,22 +140,6 @@ fn save_collections_cmd(store: CollectionStore) -> Result<(), String> {
     save_collection_store(&store)
 }
 
-/// Start the in-app party WebSocket server on 127.0.0.1 (first free port in 4680–4699, or ephemeral).
-#[tauri::command]
-async fn party_embedded_server_start() -> Result<u16, String> {
-    party_embedded::start_embedded_server().await
-}
-
-#[tauri::command]
-fn party_embedded_server_stop() -> Result<(), String> {
-    party_embedded::stop_embedded_server()
-}
-
-#[tauri::command]
-fn party_embedded_server_port() -> Option<u16> {
-    party_embedded::embedded_server_port()
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -173,9 +156,6 @@ pub fn run() {
             download_and_import,
             load_collections_cmd,
             save_collections_cmd,
-            party_embedded_server_start,
-            party_embedded_server_stop,
-            party_embedded_server_port,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

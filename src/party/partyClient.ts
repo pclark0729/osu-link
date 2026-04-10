@@ -1,4 +1,5 @@
 import { encodeClientMessage, parseServerMessage, PARTY_PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "./protocol";
+import { describePartyWsFailure } from "./partyConnectErrors";
 
 export type PartyConnectionState = "disconnected" | "connecting" | "connected" | "error";
 
@@ -49,7 +50,7 @@ export class PartyClient {
     this.emitState();
   }
 
-  connect(onOpen?: () => void) {
+  connect(onOpen?: () => void, urlCandidates?: string[]) {
     this.closedByUser = false;
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.state = { ...this.state, connection: "connected", lastError: null };
@@ -61,44 +62,25 @@ export class PartyClient {
       return;
     }
     this.clearReconnect();
-    this.state = { ...this.state, connection: "connecting", lastError: null };
+
+    const raw =
+      urlCandidates && urlCandidates.length > 0
+        ? urlCandidates
+        : [this.state.url.trim() || "ws://127.0.0.1:4680"];
+    const urls: string[] = [];
+    for (const u of raw) {
+      const t = u.trim();
+      if (t && !urls.includes(t)) urls.push(t);
+    }
+    if (urls.length === 0) urls.push("ws://127.0.0.1:4680");
+
+    const displayUrl = urls[0];
+    this.state = { ...this.state, connection: "connecting", lastError: null, url: displayUrl };
     this.emitState();
-    let url = this.state.url.trim();
-    if (!url) url = "ws://127.0.0.1:4680";
-    try {
-      const ws = new WebSocket(url);
-      this.ws = ws;
-      ws.onopen = () => {
-        this.state = { ...this.state, connection: "connected", lastError: null };
-        this.emitState();
-        onOpen?.();
-      };
-      ws.onerror = () => {
-        this.state = {
-          ...this.state,
-          connection: this.closedByUser ? "disconnected" : "error",
-          lastError: "WebSocket error (is the party server running?)",
-        };
-        this.emitState();
-      };
-      ws.onclose = () => {
-        this.ws = null;
-        const wasConnected = this.state.selfId !== null;
-        this.state = {
-          ...initialClientState(this.state.url),
-          url: this.state.url,
-          connection: this.closedByUser ? "disconnected" : wasConnected ? "error" : "disconnected",
-          lastError: this.closedByUser
-            ? null
-            : wasConnected
-              ? "Disconnected from party server."
-              : this.state.lastError,
-        };
-        this.emitState();
-        if (!this.closedByUser && wasConnected) {
-          this.scheduleReconnect();
-        }
-      };
+
+    let connectionSucceeded = false;
+
+    const bindMessages = (ws: WebSocket) => {
       ws.onmessage = (ev) => {
         const msg = parseServerMessage(String(ev.data));
         if (!msg) return;
@@ -136,14 +118,90 @@ export class PartyClient {
           this.onEvent({ kind: "beatmap_queued", msg });
         }
       };
-    } catch (e) {
-      this.state = {
-        ...this.state,
-        connection: "error",
-        lastError: String(e),
-      };
+    };
+
+    const tryOpen = (index: number) => {
+      if (this.closedByUser) return;
+      if (index >= urls.length) {
+        if (!connectionSucceeded) {
+          const last = urls[urls.length - 1] ?? displayUrl;
+          this.state = {
+            ...initialClientState(displayUrl),
+            url: displayUrl,
+            connection: "error",
+            lastError: describePartyWsFailure(1006, "", last),
+          };
+          this.emitState();
+        }
+        return;
+      }
+
+      const url = urls[index];
+      this.state = { ...this.state, connection: "connecting", url };
       this.emitState();
-    }
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(url);
+      } catch (e) {
+        tryOpen(index + 1);
+        return;
+      }
+
+      this.ws = ws;
+      bindMessages(ws);
+
+      ws.onopen = () => {
+        connectionSucceeded = true;
+        this.state = { ...this.state, connection: "connected", lastError: null, url };
+        this.emitState();
+        onOpen?.();
+      };
+
+      ws.onerror = () => {};
+
+      ws.onclose = (ev) => {
+        if (this.ws !== ws) return;
+        this.ws = null;
+
+        if (connectionSucceeded) {
+          const wasConnected = this.state.selfId !== null;
+          this.state = {
+            ...initialClientState(this.state.url),
+            url: this.state.url,
+            connection: this.closedByUser ? "disconnected" : wasConnected ? "error" : "disconnected",
+            lastError: this.closedByUser
+              ? null
+              : wasConnected
+                ? "Disconnected from party server."
+                : null,
+          };
+          this.emitState();
+          if (!this.closedByUser && wasConnected) {
+            this.scheduleReconnect();
+          }
+          return;
+        }
+
+        if (!this.closedByUser && index + 1 < urls.length) {
+          tryOpen(index + 1);
+          return;
+        }
+
+        if (!this.closedByUser) {
+          const failOpen = ev.code !== 1000 && ev.code !== 1001;
+          this.state = {
+            ...initialClientState(displayUrl),
+            url: displayUrl,
+            connection: failOpen ? "error" : "disconnected",
+            lastError: failOpen ? describePartyWsFailure(ev.code, ev.reason, url) : null,
+          };
+          this.emitState();
+        }
+      };
+    };
+
+    tryOpen(0);
   }
 
   disconnect() {

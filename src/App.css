@@ -1515,6 +1515,63 @@ button.onboarding-copy {
   word-break: break-all;
 }
 
+.party-server-status {
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+}
+
+.party-server-status-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.party-server-status-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.party-server-status-grid dt {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.party-server-status-grid dd {
+  margin: 0;
+}
+
+.party-status-code {
+  font-size: 0.9em;
+}
+
+.party-status-meta {
+  color: var(--muted);
+}
+
+.party-server-status-actions {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-strong);
+}
+
+.party-status-reconnect {
+  width: 100%;
+}
+
+.party-troubleshoot strong {
+  color: var(--text, inherit);
+}
+
 .party-conn-badge {
   font-size: 0.78rem;
   color: var(--muted);

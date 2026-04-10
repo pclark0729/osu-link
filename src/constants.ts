@@ -2,12 +2,30 @@
 export const DEFAULT_PARTY_WS_URL = "ws://127.0.0.1:4680";
 
 /**
- * When set at build time (`VITE_PUBLIC_PARTY_WS_URL`), this becomes the default party server for
- * everyone who has not saved a custom URL — use a deployed `party-server` URL (usually `wss://…`).
+ * Shared party host for this distribution. Override with `VITE_PUBLIC_PARTY_WS_URL` at build time.
+ * Hostname only must match default `PUBLIC_DOMAIN` in `party-server/install-pi.sh` (currently osulink.peyton-clark.com).
+ */
+export const HOSTED_PARTY_WS_URL = "wss://osulink.peyton-clark.com";
+
+/**
+ * Default party server for users who have not saved a custom URL (`partyServerUrl`).
+ * Build-time `VITE_PUBLIC_PARTY_WS_URL` wins; otherwise {@link HOSTED_PARTY_WS_URL}.
  */
 const rawPublic = import.meta.env.VITE_PUBLIC_PARTY_WS_URL;
 export const PUBLIC_PARTY_WS_URL =
-  typeof rawPublic === "string" && rawPublic.trim() !== "" ? rawPublic.trim() : undefined;
+  typeof rawPublic === "string" && rawPublic.trim() !== "" ? rawPublic.trim() : HOSTED_PARTY_WS_URL;
+
+/** When true, Party and Settings hide the WebSocket URL field (fixed host). */
+export const PARTY_SERVER_URL_UI_HIDDEN = true;
+
+/**
+ * Extra `ws://` URLs tried after `wss://` and `ws://public-host:4680` (NAT hairpin workaround).
+ * Pi must use `HOST=0.0.0.0` on port 4680. Update if DHCP changes; use `VITE_PARTY_EXTRA_WS_URLS` to override without editing code.
+ */
+export const PARTY_EXTRA_CONNECT_WS_URLS: readonly string[] = [
+  "ws://192.168.1.43:4680",
+  "ws://100.86.89.104:4680",
+];
 
 /** Resolution order: saved settings (elsewhere) → public default → local default. */
 export function defaultPartyWsUrlFromSettings(saved: string | null | undefined): string {
