@@ -14,6 +14,7 @@ import {
 import { OnboardingFlow } from "./OnboardingFlow";
 import { buildPartyConnectUrlCandidates } from "./party/partyConnectUrls";
 import { PartyClient, type PartyClientState } from "./party/partyClient";
+import { parseLobbyCodeFromText } from "./party/parseLobbyCode";
 import { PartyPanel } from "./PartyPanel";
 import { NeuSelect } from "./NeuSelect";
 import { TitleBar } from "./TitleBar";
@@ -354,6 +355,10 @@ export default function App() {
       const st = await invoke<{ loggedIn: boolean; username?: string | null }>("auth_status");
       if (st.loggedIn) {
         setAuthLabel(st.username ? `Signed in as ${st.username}` : "Signed in");
+        const u = st.username?.trim();
+        if (u) {
+          setPartyDisplayName((prev) => (prev.trim() === "" ? u : prev));
+        }
       } else {
         setAuthLabel("Signed out");
       }
@@ -608,43 +613,6 @@ export default function App() {
       );
   };
 
-  const usePublicPartyServer = async () => {
-    const pub = PUBLIC_PARTY_WS_URL;
-    if (!pub) return;
-    try {
-      const nextSettings: Settings = { ...settings, partyServerUrl: pub };
-      await invoke("save_settings_cmd", {
-        s: {
-          clientId: nextSettings.clientId.trim(),
-          clientSecret: nextSettings.clientSecret.trim(),
-          beatmapDirectory:
-            nextSettings.beatmapDirectory && nextSettings.beatmapDirectory.trim() !== ""
-              ? nextSettings.beatmapDirectory.trim()
-              : null,
-          onboardingCompleted: nextSettings.onboardingCompleted,
-          partyServerUrl: pub,
-        },
-      });
-      setSettings(nextSettings);
-      const c = partyClientRef.current;
-      c?.disconnect();
-      c?.setUrl(pub);
-      setPartyState((prev) => ({ ...prev, url: pub }));
-      if (PARTY_SERVER_URL_UI_HIDDEN) {
-        partyUserPrefersOfflineRef.current = false;
-        c?.connect(undefined, buildPartyConnectUrlCandidates(pub));
-      }
-      pushToast(
-        "success",
-        PARTY_SERVER_URL_UI_HIDDEN
-          ? "Using the online party server. Create or join a lobby and share the code."
-          : "Using the online party server. Click Connect, then create a lobby and share the code with friends anywhere.",
-      );
-    } catch (e) {
-      pushToast("error", String(e));
-    }
-  };
-
   const importFromSearch = async (beatmapsetId: number) => {
     setSettingsMsg(null);
     setDirectImportSetId(beatmapsetId);
@@ -860,6 +828,22 @@ export default function App() {
     }
   };
 
+  const joinPartyFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      const code = parseLobbyCodeFromText(text);
+      if (!code) {
+        pushToast("error", "No valid lobby code found in clipboard.");
+        return;
+      }
+      setJoinCodeDraft(code);
+      const ok = partyClientRef.current?.joinLobby(code, partyDisplayName);
+      if (!ok) pushToast("error", "Not connected to the party server.");
+    } catch (e) {
+      pushToast("error", `Clipboard: ${String(e)}`);
+    }
+  };
+
   const totalMapsInLibrary = collectionStore.collections.reduce((acc, c) => acc + c.items.length, 0);
 
   if (!bootReady) {
@@ -973,6 +957,7 @@ export default function App() {
 
         <div className="side-footer">
           <div className="auth-compact">{authLabel}</div>
+          <p className="side-credit">Made by Peyton</p>
         </div>
       </aside>
 
@@ -1000,7 +985,6 @@ export default function App() {
               setSettings((s) => ({ ...s, partyServerUrl: v.trim() === "" ? null : v.trim() }))
             }
             publicPartyUrl={PUBLIC_PARTY_WS_URL}
-            onUsePublicPartyServer={() => void usePublicPartyServer()}
             onConnect={() => {
               partyUserPrefersOfflineRef.current = false;
               const urls = buildPartyConnectUrlCandidates(settings.partyServerUrl);
@@ -1013,6 +997,7 @@ export default function App() {
             }}
             onCreateLobby={() => partyClientRef.current?.createLobby(partyDisplayName)}
             onJoinLobby={() => partyClientRef.current?.joinLobby(joinCodeDraft, partyDisplayName)}
+            onJoinFromClipboard={() => void joinPartyFromClipboard()}
             onLeaveLobby={() => partyClientRef.current?.leaveLobby()}
             onCopyCode={async () => {
               const code = partyState.lobbyCode;

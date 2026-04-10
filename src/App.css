@@ -335,6 +335,16 @@ body {
   padding: 0.35rem;
 }
 
+.side-credit {
+  margin: 0.35rem 0 0;
+  padding: 0 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: rgba(148, 145, 163, 0.55);
+  letter-spacing: 0.02em;
+  line-height: 1.35;
+}
+
 .app-stage {
   flex: 1;
   display: flex;

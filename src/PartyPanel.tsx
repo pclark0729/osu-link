@@ -22,11 +22,11 @@ export function PartyPanel({
   onJoinCodeChange,
   onPartyUrlChange,
   publicPartyUrl,
-  onUsePublicPartyServer,
   onConnect,
   onDisconnect,
   onCreateLobby,
   onJoinLobby,
+  onJoinFromClipboard,
   onLeaveLobby,
   onCopyCode,
 }: {
@@ -37,13 +37,12 @@ export function PartyPanel({
   onDisplayNameChange: (v: string) => void;
   onJoinCodeChange: (v: string) => void;
   onPartyUrlChange: (v: string) => void;
-  /** When set at build time, users can one-click switch to the shared internet party host. */
   publicPartyUrl: string | undefined;
-  onUsePublicPartyServer: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
   onCreateLobby: () => void;
   onJoinLobby: () => void;
+  onJoinFromClipboard: () => void;
   onLeaveLobby: () => void;
   onCopyCode: () => void;
 }) {
@@ -66,8 +65,7 @@ export function PartyPanel({
             <>Connect below, then create or join a lobby and share the <strong>lobby code</strong>.</>
           ) : (
             <>
-              Everyone uses the same <strong>party server URL</strong> and a short <strong>lobby code</strong>. For friends
-              across the internet, use a publicly reachable server (see online section below).
+              Everyone uses the same <strong>party server URL</strong> and a short <strong>lobby code</strong>.
             </>
           )}
         </p>
@@ -98,7 +96,7 @@ export function PartyPanel({
             </>
           )}
         </dl>
-        {(connection === "disconnected" || connection === "error") && connection !== "connecting" && (
+        {(connection === "disconnected" || connection === "error") && (
           <div className="party-server-status-actions">
             <button type="button" className="primary party-status-reconnect" onClick={onConnect}>
               {connection === "error" || lastError ? "Reconnect to server" : "Connect to server"}
@@ -107,24 +105,7 @@ export function PartyPanel({
         )}
       </div>
 
-      {publicPartyUrl ? (
-        <div className="party-online-cta">
-          <div className="party-online-title">Play online</div>
-          <p className="hint" style={{ marginTop: 0 }}>
-            {PARTY_SERVER_URL_UI_HIDDEN
-              ? "Reset here if the party server was changed and you need the shared host again."
-              : "This build is configured with a shared party host. Use it so you and friends can connect from anywhere."}
-          </p>
-          <button
-            type="button"
-            className="primary"
-            disabled={partyState.connection === "connecting" || Boolean(partyState.lobbyCode && partyState.selfId)}
-            onClick={onUsePublicPartyServer}
-          >
-            Use online party server
-          </button>
-        </div>
-      ) : (
+      {!publicPartyUrl && (
         <div className="party-online-cta party-online-manual">
           <div className="party-online-title">Play online (anywhere)</div>
           <p className="hint" style={{ marginTop: 0 }}>
@@ -209,9 +190,14 @@ export function PartyPanel({
                   onChange={(e) => onJoinCodeChange(e.target.value.toUpperCase())}
                 />
               </label>
-              <button type="button" className="secondary" onClick={onJoinLobby}>
-                Join lobby
-              </button>
+              <div className="row-actions" style={{ flexWrap: "wrap", gap: "0.5rem", marginTop: "0.5rem" }}>
+                <button type="button" className="secondary" onClick={onJoinLobby}>
+                  Join lobby
+                </button>
+                <button type="button" className="secondary" onClick={onJoinFromClipboard}>
+                  Join from clipboard
+                </button>
+              </div>
             </div>
           </div>
         </>
