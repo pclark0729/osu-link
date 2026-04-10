@@ -1,0 +1,16 @@
+{
+  "name": "osu-link-party-server",
+  "private": true,
+  "version": "0.2.0",
+  "description": "WebSocket coordination server for osu-link party lobbies",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
