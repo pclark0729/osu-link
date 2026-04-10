@@ -15,12 +15,32 @@ HOST=0.0.0.0 PORT=4680 npm start
 
 Default WebSocket URL: `ws://127.0.0.1:4680` (when `HOST=127.0.0.1`).
 
+## Social REST API (`/api/v1`)
+
+The HTTP server (default port `PORT + 1`, e.g. `4681`) serves JSON **`/api/v1/*`** endpoints authenticated with `Authorization: Bearer <osu! access token>` (validated via osu! `GET /api/v2/me`). SQLite storage defaults to `data/social.sqlite` under this directory (override with **`SOCIAL_DB_PATH`**).
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/me` | Session / upsert user |
+| GET | `/api/v1/friends` | Friend list (osu-link) |
+| POST | `/api/v1/friends/request` | `{ "targetOsuId": number }` |
+| POST | `/api/v1/friends/accept` | `{ "friendshipId": number }` |
+| DELETE | `/api/v1/friends/:osuId` | Remove friendship |
+| GET | `/api/v1/activity` | Friend-visible activity feed |
+| POST | `/api/v1/battles` | Async battle |
+| GET | `/api/v1/battles` | List your battles |
+| POST | `/api/v1/challenges` | Create challenge |
+
+Rate limit for `/api/v1`: **`API_RATE_MAX`** (default `300` per IP per minute).
+
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HOST` | `127.0.0.1` | WebSocket bind address. Use **`0.0.0.0`** on a Pi/VPS/Docker so remote clients can connect. |
 | `PORT` | `4680` | WebSocket port. |
+| `SOCIAL_DB_PATH` | `data/social.sqlite` (under server dir) | SQLite file for social features. |
+| `API_RATE_MAX` | `300` | Max `/api/v1` requests per IP per rolling minute. |
 | `HEALTH_HOST` | `127.0.0.1` | HTTP health server bind address. |
 | `HEALTH_PORT` | `PORT + 1` (e.g. `4681`) | HTTP port for `/health`. Set to **`0`** to disable. |
 | `DISABLE_HEALTH` | — | Set to `1` to disable the HTTP health server. |

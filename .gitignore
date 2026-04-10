@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 party-server/node_modules
+party-server/data
 
 dist
 src-tauri/target

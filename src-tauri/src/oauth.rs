@@ -171,7 +171,7 @@ pub fn authorize_interactive(client_id: &str, client_secret: &str) -> Result<Tok
         AUTH_URL,
         encode(client_id),
         encode(&redirect_uri),
-        encode("public identify"),
+        encode("public identify friends.read"),
         encode(&state)
     );
 

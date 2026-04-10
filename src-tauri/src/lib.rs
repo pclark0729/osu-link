@@ -1,5 +1,6 @@
 mod collections;
 mod import;
+mod local_library;
 mod oauth;
 mod osu_api;
 mod paths;
@@ -8,13 +9,15 @@ mod settings;
 use collections::{load_collection_store, save_collection_store, CollectionStore};
 use serde::Serialize;
 use serde_json::Value;
-use settings::{load_settings, save_settings, Settings};
+use settings::{load_settings, resolve_social_api_base, save_settings, Settings};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthStatus {
     logged_in: bool,
     username: Option<String>,
+    /// osu! user id from `GET /api/v2/me` (for UI when party-server `/me` is unavailable).
+    osu_id: Option<i64>,
 }
 
 #[tauri::command]
@@ -48,6 +51,7 @@ async fn auth_status() -> Result<AuthStatus, String> {
         return Ok(AuthStatus {
             logged_in: false,
             username: None,
+            osu_id: None,
         });
     };
     let s = load_settings();
@@ -55,6 +59,7 @@ async fn auth_status() -> Result<AuthStatus, String> {
         return Ok(AuthStatus {
             logged_in: true,
             username: None,
+            osu_id: None,
         });
     }
     let token = oauth::ensure_fresh_access_token(
@@ -64,14 +69,16 @@ async fn auth_status() -> Result<AuthStatus, String> {
     )
     .await?;
     let me = osu_api::api_me(&token).await.ok();
-    let username = me.and_then(|v| {
+    let username = me.as_ref().and_then(|v| {
         v.get("username")
             .and_then(|x| x.as_str())
             .map(std::string::ToString::to_string)
     });
+    let osu_id = me.as_ref().and_then(|v| v.get("id").and_then(|x| x.as_i64()));
     Ok(AuthStatus {
         logged_in: true,
         username,
+        osu_id,
     })
 }
 
@@ -109,6 +116,14 @@ fn preview_beatmap_dir(override_path: Option<String>) -> Result<String, String> 
     Ok(p.to_string_lossy().into_owned())
 }
 
+/// Beatmapset IDs found under the resolved Songs folder (folder name or `.osu` header).
+#[tauri::command]
+fn get_local_beatmapset_ids() -> Result<Vec<i64>, String> {
+    let s = load_settings();
+    let dir = paths::resolve_beatmap_directory(s.beatmap_directory.as_deref())?;
+    local_library::scan_local_beatmapset_ids(&dir)
+}
+
 #[tauri::command]
 async fn download_and_import(set_id: i64, no_video: bool) -> Result<String, String> {
     let s = load_settings();
@@ -140,6 +155,126 @@ fn save_collections_cmd(store: CollectionStore) -> Result<(), String> {
     save_collection_store(&store)
 }
 
+async fn fresh_token() -> Result<(Settings, String), String> {
+    let s = load_settings();
+    if s.client_id.is_empty() || s.client_secret.is_empty() {
+        return Err("Configure OAuth Client ID and Secret.".into());
+    }
+    let mut bundle = oauth::load_tokens()?.ok_or_else(|| "Sign in with osu! first.".to_string())?;
+    let token = oauth::ensure_fresh_access_token(
+        s.client_id.trim(),
+        s.client_secret.trim(),
+        &mut bundle,
+    )
+    .await?;
+    Ok((s, token))
+}
+
+#[tauri::command]
+async fn social_api_get(path: String) -> Result<Value, String> {
+    let (s, token) = fresh_token().await?;
+    let base = resolve_social_api_base(&s)
+        .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
+    let p = path.trim();
+    let p = if p.starts_with('/') { p } else { return Err("Path must start with /".into()) };
+    let url = format!("{}{}", base.trim_end_matches('/'), p);
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("social API {status}: {text}"));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"))
+}
+
+#[tauri::command]
+async fn social_api_post(path: String, body: Option<Value>) -> Result<Value, String> {
+    let (s, token) = fresh_token().await?;
+    let base = resolve_social_api_base(&s)
+        .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
+    let p = path.trim();
+    let p = if p.starts_with('/') { p } else { return Err("Path must start with /".into()) };
+    let url = format!("{}{}", base.trim_end_matches('/'), p);
+    let client = reqwest::Client::new();
+    let mut req = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json");
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let res = req.send().await.map_err(|e| e.to_string())?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("social API {status}: {text}"));
+    }
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"))
+}
+
+#[tauri::command]
+async fn social_api_delete(path: String) -> Result<Value, String> {
+    let (s, token) = fresh_token().await?;
+    let base = resolve_social_api_base(&s)
+        .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
+    let p = path.trim();
+    let p = if p.starts_with('/') { p } else { return Err("Path must start with /".into()) };
+    let url = format!("{}{}", base.trim_end_matches('/'), p);
+    let client = reqwest::Client::new();
+    let res = client
+        .delete(&url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    let text = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("social API {status}: {text}"));
+    }
+    if text.trim().is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"))
+}
+
+#[tauri::command]
+async fn osu_friends() -> Result<Value, String> {
+    let (_s, token) = fresh_token().await?;
+    osu_api::api_friends(&token).await
+}
+
+#[tauri::command]
+async fn osu_user_profile(user_id: i64) -> Result<Value, String> {
+    let (_s, token) = fresh_token().await?;
+    osu_api::api_user(&token, user_id).await
+}
+
+#[tauri::command]
+async fn osu_user_ruleset_stats(user_id: i64, mode: String) -> Result<Value, String> {
+    let (_s, token) = fresh_token().await?;
+    osu_api::api_user_ruleset_stats(&token, user_id, mode.trim()).await
+}
+
+#[tauri::command]
+async fn osu_user_recent_scores(user_id: i64, limit: Option<u32>, mode: Option<String>) -> Result<Value, String> {
+    let (_s, token) = fresh_token().await?;
+    let lim = limit.unwrap_or(20);
+    let m = mode.as_deref().unwrap_or("osu");
+    osu_api::api_user_recent_scores(&token, user_id, lim, m).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -155,9 +290,17 @@ pub fn run() {
             search_beatmapsets,
             get_beatmap_dir,
             preview_beatmap_dir,
+            get_local_beatmapset_ids,
             download_and_import,
             load_collections_cmd,
             save_collections_cmd,
+            social_api_get,
+            social_api_post,
+            social_api_delete,
+            osu_friends,
+            osu_user_profile,
+            osu_user_ruleset_stats,
+            osu_user_recent_scores,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

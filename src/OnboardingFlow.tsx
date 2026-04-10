@@ -97,6 +97,7 @@ export function OnboardingFlow({
             initialPartyServerUrl && initialPartyServerUrl.trim() !== ""
               ? initialPartyServerUrl.trim()
               : null,
+          socialApiBaseUrl: null,
         },
       });
       await invoke("oauth_login");
@@ -110,6 +111,7 @@ export function OnboardingFlow({
             initialPartyServerUrl && initialPartyServerUrl.trim() !== ""
               ? initialPartyServerUrl.trim()
               : null,
+          socialApiBaseUrl: null,
         },
       });
       onFinished();
@@ -208,7 +210,10 @@ export function OnboardingFlow({
               </label>
             </div>
 
-            <p className="hint">Close other osu-link windows before signing in. The app listens on port 42813 during login.</p>
+            <p className="hint">
+              Close other osu-link windows before signing in. The app listens on port 42813 during login. Requested scopes:{" "}
+              <code>public</code>, <code>identify</code>, <code>friends.read</code> (Social tab / osu! friends list).
+            </p>
 
             <div className="onboarding-actions">
               <button type="button" className="secondary" onClick={() => setStep(0)}>

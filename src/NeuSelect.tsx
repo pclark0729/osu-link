@@ -48,10 +48,16 @@ export function NeuSelect({
   const pick = useCallback(
     (v: string) => {
       onChange(v);
-      setOpen(false);
+      /* Defer so parent updates can’t leave the list mounted in an odd state; always close the panel. */
+      queueMicrotask(() => setOpen(false));
     },
     [onChange],
   );
+
+  /** Controlled value changed → ensure menu is closed (covers missed closes on select). */
+  useEffect(() => {
+    setOpen(false);
+  }, [value]);
 
   useEffect(() => {
     if (!open) return;
@@ -134,7 +140,7 @@ export function NeuSelect({
         >
           {options.map((o, i) => (
             <li
-              key={o.value}
+              key={`${o.value}-${i}`}
               id={`${id}-opt-${i}`}
               ref={(el) => {
                 itemRefs.current[i] = el;
@@ -145,8 +151,11 @@ export function NeuSelect({
                 i === highlight ? "highlighted" : ""
               }`}
               onMouseEnter={() => setHighlight(i)}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => pick(o.value)}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                pick(o.value);
+              }}
             >
               {o.label}
             </li>

@@ -101,6 +101,88 @@ pub async fn api_me(access_token: &str) -> Result<Value, String> {
     res.json().await.map_err(|e| e.to_string())
 }
 
+/// Friends list (`friends.read` scope).
+///
+/// Sends `x-api-version` so the server returns `UserRelation` entries (with `target`) per osu-web ≥ 20241022.
+pub async fn api_friends(access_token: &str) -> Result<Value, String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("{API}/friends"))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .header("x-api-version", "20241022")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("/friends failed: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
+/// User profile (compact or full depending on API).
+pub async fn api_user(access_token: &str, user_id: i64) -> Result<Value, String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("{API}/users/{user_id}"))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("/users failed: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
+/// Per-ruleset statistics (e.g. mode `osu`, `taiko`).
+pub async fn api_user_ruleset_stats(
+    access_token: &str,
+    user_id: i64,
+    mode: &str,
+) -> Result<Value, String> {
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("{API}/users/{user_id}/{mode}"))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("/users/:mode stats failed: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
+/// Recent scores for performance snapshots / comparisons.
+pub async fn api_user_recent_scores(
+    access_token: &str,
+    user_id: i64,
+    limit: u32,
+    mode: &str,
+) -> Result<Value, String> {
+    let lim = limit.min(100).max(1);
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("{API}/users/{user_id}/scores/recent"))
+        .query(&[("limit", lim.to_string()), ("mode", mode.to_string())])
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("/scores/recent failed: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
 /// Download beatmapset `.osz` from a public mirror (no OAuth).
 pub async fn download_beatmapset_bytes(set_id: i64, no_video: bool) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()

@@ -18,6 +18,9 @@ pub struct Settings {
     /// WebSocket URL for party lobbies (e.g. ws://127.0.0.1:4680).
     #[serde(default)]
     pub party_server_url: Option<String>,
+    /// Optional HTTPS base for social REST API (e.g. https://127.0.0.1:4681). If unset, derived from `party_server_url`.
+    #[serde(default)]
+    pub social_api_base_url: Option<String>,
 }
 
 pub fn app_storage_dir() -> PathBuf {
@@ -55,4 +58,52 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
     let path = settings_path();
     let j = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
     fs::write(path, j).map_err(|e| e.to_string())
+}
+
+/// Default hosted party WebSocket (must match frontend `HOSTED_PARTY_WS_URL` when user has no saved URL).
+const DEFAULT_PARTY_WS_FALLBACK: &str = "wss://osulink.peyton-clark.com";
+
+/// HTTPS base URL for the self-hosted social API (`/api/v1/...`).
+pub fn resolve_social_api_base(settings: &Settings) -> Option<String> {
+    if let Some(ref u) = settings.social_api_base_url {
+        let t = u.trim();
+        if !t.is_empty() {
+            return Some(t.trim_end_matches('/').to_string());
+        }
+    }
+    let ws = settings
+        .party_server_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_PARTY_WS_FALLBACK);
+    party_ws_to_http_base(ws)
+}
+
+fn party_ws_to_http_base(ws: &str) -> Option<String> {
+    let ws = ws.trim();
+    if ws.is_empty() {
+        return None;
+    }
+    if let Some(rest) = ws.strip_prefix("ws://") {
+        if let Some(colon) = rest.rfind(':') {
+            let host = &rest[..colon];
+            let port = &rest[colon + 1..];
+            if port == "4680" {
+                return Some(format!("http://{host}:4681"));
+            }
+        }
+        return Some(format!("http://{rest}"));
+    }
+    if let Some(rest) = ws.strip_prefix("wss://") {
+        if let Some(colon) = rest.rfind(':') {
+            let host = &rest[..colon];
+            let port = &rest[colon + 1..];
+            if port == "4680" {
+                return Some(format!("https://{host}:4681"));
+            }
+        }
+        return Some(format!("https://{rest}"));
+    }
+    None
 }

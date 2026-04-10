@@ -10,6 +10,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 
+import { handleSocialApi } from "./api.mjs";
+import { defaultDbPath, openDatabase } from "./db.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf8"));
 
@@ -30,6 +33,8 @@ const MAX_LOBBIES = 500;
 const MAX_MEMBERS_PER_LOBBY = 16;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 120;
+/** REST /api/v1 per-IP budget per minute */
+const API_RATE_MAX = Number(process.env.API_RATE_MAX) || 300;
 const SHUTDOWN_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -56,6 +61,27 @@ const log = {
   },
 };
 
+/** @type {import('better-sqlite3').Database | null} */
+let socialDb = null;
+try {
+  const dbPath = defaultDbPath(process.env.SOCIAL_DB_PATH);
+  socialDb = openDatabase(dbPath);
+  log.info(`Social API database ready (${dbPath})`);
+} catch (e) {
+  log.error(`Social database init failed: ${/** @type {Error} */ (e).message}`);
+}
+
+function checkApiRate(ip) {
+  const now = Date.now();
+  let b = apiRateBuckets.get(ip);
+  if (!b || now - b.t0 > RATE_WINDOW_MS) {
+    b = { t0: now, count: 0 };
+    apiRateBuckets.set(ip, b);
+  }
+  b.count += 1;
+  return b.count <= API_RATE_MAX;
+}
+
 if (HEALTH_PORT !== 0 && HEALTH_PORT === PORT) {
   log.error(`HEALTH_PORT (${HEALTH_PORT}) cannot equal WebSocket PORT (${PORT}).`);
   process.exit(1);
@@ -69,6 +95,7 @@ const lobbies = new Map();
 /** @type {WeakMap<import('ws').WebSocket, { memberId: string, lobbyCode: string }>} */
 const socketMeta = new WeakMap();
 const rateBuckets = new Map();
+const apiRateBuckets = new Map();
 
 function genCode() {
   let code;
@@ -121,6 +148,9 @@ function healthPayload() {
     version: pkg.version,
     uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
     protocolVersion: PROTOCOL_VERSION,
+    database: {
+      social: socialDb !== null,
+    },
     websocket: {
       host: HOST,
       port: PORT,
@@ -448,7 +478,36 @@ let healthServer = null;
 
 if (HEALTH_PORT > 0) {
   healthServer = http.createServer((req, res) => {
-    const url = req.url?.split("?")[0] ?? "";
+    const fullUrl = req.url ?? "/";
+    const pathname = new URL(fullUrl, "http://localhost").pathname;
+    const method = req.method || "GET";
+
+    if (pathname.startsWith("/api/v1")) {
+      if (!socialDb) {
+        res.statusCode = 503;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ error: "database_unavailable" }));
+        return;
+      }
+      const ip = getClientIp(req);
+      if (!checkApiRate(ip)) {
+        res.statusCode = 429;
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify({ error: "rate_limited" }));
+        return;
+      }
+      void handleSocialApi(socialDb, req, res, method, pathname).catch((e) => {
+        log.error("handleSocialApi exception:", e);
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ error: "internal" }));
+        }
+      });
+      return;
+    }
+
+    const url = pathname;
     if (url === "/health" || url === "/healthz") {
       res.setHeader("Content-Type", "application/json; charset=utf-8");
       res.end(JSON.stringify(healthPayload()));
@@ -503,6 +562,15 @@ function shutdown(signal) {
     pending -= 1;
     if (pending <= 0) finish();
   };
+
+  if (socialDb) {
+    try {
+      socialDb.close();
+      socialDb = null;
+    } catch (e) {
+      log.warn(`sqlite close: ${/** @type {Error} */ (e).message}`);
+    }
+  }
 
   if (healthServer) {
     healthServer.close((err) => step("health close", err));

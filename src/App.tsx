@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildSharedPayload,
   parseImportedCollectionJson,
@@ -17,6 +17,7 @@ import { PartyClient, type PartyClientState } from "./party/partyClient";
 import { parseLobbyCodeFromText } from "./party/parseLobbyCode";
 import { PartyPanel } from "./PartyPanel";
 import { NeuSelect } from "./NeuSelect";
+import { SocialPanel } from "./SocialPanel";
 import { TitleBar } from "./TitleBar";
 import { runAutoUpdate } from "./autoUpdate";
 import "./App.css";
@@ -53,12 +54,17 @@ const SEARCH_SORT_OPTIONS = [
   { value: "title_asc", label: "Title A–Z" },
 ] as const;
 
+/** Max API pages to walk when building curated lists; avoids unbounded requests. */
+const CURATE_PAGE_CAP = 8;
+const CURATE_PICK_COUNT = 8;
+
 interface Settings {
   clientId: string;
   clientSecret: string;
   beatmapDirectory: string | null;
   onboardingCompleted: boolean;
   partyServerUrl: string | null;
+  socialApiBaseUrl: string | null;
 }
 
 interface CollectionItem {
@@ -227,6 +233,20 @@ function IconParty() {
   );
 }
 
+function IconSocial() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM20 8v6M23 11h-6"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 const initialPartyState = (url: string): PartyClientState => ({
   connection: "disconnected",
   lastError: null,
@@ -240,13 +260,14 @@ const initialPartyState = (url: string): PartyClientState => ({
 
 export default function App() {
   const [bootReady, setBootReady] = useState(false);
-  const [tab, setTab] = useState<"search" | "collection" | "party" | "settings">("search");
+  const [tab, setTab] = useState<"search" | "collection" | "party" | "social" | "settings">("search");
   const [settings, setSettings] = useState<Settings>({
     clientId: "",
     clientSecret: "",
     beatmapDirectory: null,
     onboardingCompleted: false,
     partyServerUrl: null,
+    socialApiBaseUrl: null,
   });
   const [resolvedSongs, setResolvedSongs] = useState<string>("");
   const [authLabel, setAuthLabel] = useState<string>("Signed out");
@@ -279,6 +300,12 @@ export default function App() {
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [searchAttempted, setSearchAttempted] = useState(false);
+  const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
+  const [hideOwnedSearch, setHideOwnedSearch] = useState(false);
+  const [curateResults, setCurateResults] = useState<unknown[]>([]);
+  const [curating, setCurating] = useState(false);
+  const [curateError, setCurateError] = useState<string | null>(null);
+  const localLibraryRef = useRef<Set<number>>(new Set());
   const importFileRef = useRef<HTMLInputElement>(null);
   const [partyState, setPartyState] = useState<PartyClientState>(() =>
     initialPartyState(defaultPartyWsUrlFromSettings(undefined)),
@@ -294,6 +321,22 @@ export default function App() {
   useEffect(() => {
     storeRef.current = collectionStore;
   }, [collectionStore]);
+
+  useEffect(() => {
+    localLibraryRef.current = localBeatmapsetIds;
+  }, [localBeatmapsetIds]);
+
+  const reloadLocalLibrary = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const ids = await invoke<number[]>("get_local_beatmapset_ids");
+      setLocalBeatmapsetIds(new Set(ids));
+    } catch {
+      setLocalBeatmapsetIds(new Set());
+    }
+  }, []);
+  const reloadLocalLibraryRef = useRef(reloadLocalLibrary);
+  reloadLocalLibraryRef.current = reloadLocalLibrary;
 
   const pushToast = useCallback((tone: Toast["tone"], message: string) => {
     setToast({ tone, message });
@@ -328,6 +371,7 @@ export default function App() {
               "success",
               `Party: ${label} imported — ${path}. Press F5 in osu! if needed.`,
             );
+            void reloadLocalLibraryRef.current();
           } catch (e) {
             pushToastRef.current("error", `Party import failed (${label}): ${String(e)}`);
           }
@@ -350,6 +394,16 @@ export default function App() {
 
   const activeCollection = getActiveCollection(collectionStore);
   const activeItems = activeCollection?.items ?? [];
+
+  const searchDisplayResults = useMemo(() => {
+    if (!hideOwnedSearch) return rawResults;
+    return rawResults.filter((raw) => {
+      const set = raw as Record<string, unknown>;
+      const sid = Number(set.id);
+      if (!Number.isFinite(sid)) return true;
+      return !localBeatmapsetIds.has(sid);
+    });
+  }, [rawResults, hideOwnedSearch, localBeatmapsetIds]);
 
   useEffect(() => {
     setCollectionNameDraft(activeCollection?.name ?? "");
@@ -379,7 +433,8 @@ export default function App() {
     } catch {
       setResolvedSongs("");
     }
-  }, []);
+    await reloadLocalLibrary();
+  }, [reloadLocalLibrary]);
 
   const handleOnboardingFinished = useCallback(async () => {
     try {
@@ -390,6 +445,7 @@ export default function App() {
         beatmapDirectory: s.beatmapDirectory ?? null,
         onboardingCompleted: s.onboardingCompleted !== false,
         partyServerUrl: s.partyServerUrl ?? null,
+        socialApiBaseUrl: s.socialApiBaseUrl ?? null,
       });
     } catch {
       setSettings((prev) => ({ ...prev, onboardingCompleted: true }));
@@ -408,6 +464,7 @@ export default function App() {
           beatmapDirectory: s.beatmapDirectory ?? null,
           onboardingCompleted: s.onboardingCompleted !== false,
           partyServerUrl: s.partyServerUrl ?? null,
+          socialApiBaseUrl: s.socialApiBaseUrl ?? null,
         });
         const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
         partyClientRef.current?.setUrl(urls[0]);
@@ -456,6 +513,10 @@ export default function App() {
           partyServerUrl:
             settings.partyServerUrl && settings.partyServerUrl.trim() !== ""
               ? settings.partyServerUrl.trim()
+              : null,
+          socialApiBaseUrl:
+            settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
+              ? settings.socialApiBaseUrl.trim()
               : null,
         },
       });
@@ -562,6 +623,120 @@ export default function App() {
     }
   };
 
+  const runCurateDiscover = async () => {
+    setCurateError(null);
+    setCurating(true);
+    setCurateResults([]);
+    try {
+      const pool: unknown[] = [];
+      let cursor: string | null = null;
+      const local = localLibraryRef.current;
+      let pages = 0;
+      while (pages < CURATE_PAGE_CAP) {
+        pages += 1;
+        const input: SearchInput = {
+          q: query.trim() || null,
+          m: MODE_API[mode],
+          s: section,
+          sort,
+          cursor_string: cursor,
+          g:
+            genre.trim() === ""
+              ? null
+              : Number.isFinite(Number(genre))
+                ? Number(genre)
+                : null,
+          l:
+            language.trim() === ""
+              ? null
+              : Number.isFinite(Number(language))
+                ? Number(language)
+                : null,
+          e: extras.trim() || null,
+          c: general.trim() || null,
+          r: ranks.trim() || null,
+          nsfw: nsfw || null,
+        };
+        const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
+        const sets = filterSetsByModeAndStars((res.beatmapsets as unknown[]) || [], mode, minStars, maxStars);
+        for (const s of sets) {
+          const id = Number((s as Record<string, unknown>).id);
+          if (!Number.isFinite(id) || local.has(id)) continue;
+          pool.push(s);
+        }
+        if (pool.length >= CURATE_PICK_COUNT * 3) break;
+        const cur = res.cursor_string as string | undefined | null;
+        cursor = cur && cur.length > 0 ? cur : null;
+        if (!cursor) break;
+      }
+      const arr = [...pool];
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      setCurateResults(arr.slice(0, CURATE_PICK_COUNT));
+    } catch (e) {
+      setCurateError(String(e));
+    } finally {
+      setCurating(false);
+    }
+  };
+
+  const runCurateNewRanked = async () => {
+    setCurateError(null);
+    setCurating(true);
+    setCurateResults([]);
+    try {
+      const out: unknown[] = [];
+      let cursor: string | null = null;
+      const local = localLibraryRef.current;
+      let pages = 0;
+      while (pages < CURATE_PAGE_CAP) {
+        pages += 1;
+        const input: SearchInput = {
+          q: query.trim() || null,
+          m: MODE_API[mode],
+          s: "ranked",
+          sort: "ranked_desc",
+          cursor_string: cursor,
+          g:
+            genre.trim() === ""
+              ? null
+              : Number.isFinite(Number(genre))
+                ? Number(genre)
+                : null,
+          l:
+            language.trim() === ""
+              ? null
+              : Number.isFinite(Number(language))
+                ? Number(language)
+                : null,
+          e: extras.trim() || null,
+          c: general.trim() || null,
+          r: ranks.trim() || null,
+          nsfw: nsfw || null,
+        };
+        const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
+        const sets = filterSetsByModeAndStars((res.beatmapsets as unknown[]) || [], mode, minStars, maxStars);
+        for (const s of sets) {
+          const id = Number((s as Record<string, unknown>).id);
+          if (!Number.isFinite(id) || local.has(id)) continue;
+          out.push(s);
+          if (out.length >= CURATE_PICK_COUNT) break;
+        }
+        if (out.length >= CURATE_PICK_COUNT) break;
+        const cur = res.cursor_string as string | undefined | null;
+        cursor = cur && cur.length > 0 ? cur : null;
+        if (!cursor) break;
+      }
+      setCurateResults(out.slice(0, CURATE_PICK_COUNT));
+    } catch (e) {
+      setCurateError(String(e));
+    } finally {
+      setCurating(false);
+    }
+  };
+
   const addToCollection = (set: Record<string, unknown>) => {
     const id = Number(set.id);
     if (Number.isNaN(id)) return;
@@ -629,6 +804,7 @@ export default function App() {
       const msg = `Imported to: ${path}. Press F5 in osu! if the map does not appear.`;
       setSettingsMsg(msg);
       pushToast("success", msg);
+      await refreshPaths();
     } catch (e) {
       const msg = String(e);
       setSettingsMsg(msg);
@@ -645,6 +821,10 @@ export default function App() {
         settings.partyServerUrl && settings.partyServerUrl.trim() !== ""
           ? settings.partyServerUrl.trim()
           : null;
+      const socialUrl =
+        settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
+          ? settings.socialApiBaseUrl.trim()
+          : null;
       await invoke("save_settings_cmd", {
         s: {
           clientId: settings.clientId.trim(),
@@ -655,6 +835,7 @@ export default function App() {
               : null,
           onboardingCompleted: settings.onboardingCompleted,
           partyServerUrl: partyUrl,
+          socialApiBaseUrl: socialUrl,
         },
       });
       const wsUrl = defaultPartyWsUrlFromSettings(partyUrl);
@@ -703,6 +884,7 @@ export default function App() {
       const msg = `Imported to: ${path}. Press F5 in osu! if the map does not appear.`;
       setSettingsMsg(msg);
       pushToast("success", msg);
+      await refreshPaths();
     } catch (e) {
       const msg = String(e);
       pushToast("error", msg);
@@ -947,6 +1129,19 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={`side-nav-item ${tab === "social" ? "active" : ""}`}
+            onClick={() => setTab("social")}
+          >
+            <span className="side-nav-icon">
+              <IconSocial />
+            </span>
+            <span className="side-nav-text">
+              Social
+              <span className="side-nav-desc">Friends, battles, activity</span>
+            </span>
+          </button>
+          <button
+            type="button"
             className={`side-nav-item ${tab === "settings" ? "active" : ""}`}
             onClick={() => setTab("settings")}
           >
@@ -978,6 +1173,10 @@ export default function App() {
 
         <main className="main-scroll">
           <div key={tab} className="main-tab-pane">
+        {tab === "social" && (
+          <SocialPanel onToast={(tone, message) => pushToast(tone, message)} />
+        )}
+
         {tab === "party" && (
           <PartyPanel
             partyState={partyState}
@@ -1083,7 +1282,36 @@ export default function App() {
                 />
               </label>
             )}
+            <label className="field" style={{ marginTop: "0.75rem" }}>
+              <span>Social API base URL (optional)</span>
+              <input
+                type="text"
+                autoComplete="off"
+                placeholder="Derived from party URL if empty (e.g. https://127.0.0.1:4681)"
+                value={settings.socialApiBaseUrl ?? ""}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    socialApiBaseUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                  })
+                }
+              />
+            </label>
             <p className="hint">Resolved folder: {resolvedSongs || "—"}</p>
+            <p className="hint">
+              Local library:{" "}
+              <strong>{localBeatmapsetIds.size}</strong> beatmap set{localBeatmapsetIds.size === 1 ? "" : "s"} detected
+              under this folder (subfolders scanned for set IDs).
+            </p>
+            <div className="row-actions">
+              <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void refreshPaths()}>
+                Rescan Songs folder
+              </button>
+            </div>
+            <p className="hint">
+              After scope changes, sign in again. Social features need the party server HTTP port (default{" "}
+              <code>4681</code>) reachable where your app runs.
+            </p>
             <div className="row-actions">
               <button type="button" className="primary" onClick={() => void saveSettings()}>
                 Save settings
@@ -1188,6 +1416,41 @@ export default function App() {
                   <input type="checkbox" checked={noVideo} onChange={(e) => setNoVideo(e.target.checked)} />
                   Downloads without video (recommended)
                 </label>
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={hideOwnedSearch} onChange={(e) => setHideOwnedSearch(e.target.checked)} />
+                  Hide maps already in Songs folder
+                </label>
+              </div>
+              <div className="curate-panel">
+                <div className="curate-panel-title">Curate</div>
+                <p className="hint curate-panel-desc">
+                  Picks maps you don&apos;t have locally yet (same mode / star / advanced filters as above). Discover uses
+                  your sort and shuffles; New ranked uses ranked sets sorted by most recently ranked.
+                </p>
+                {curateError && <div className="error-banner">{curateError}</div>}
+                <div className="row-actions">
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={curating || searching}
+                    onClick={() => void runCurateDiscover()}
+                  >
+                    {curating ? "Curating…" : "Discover (shuffle)"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={curating || searching}
+                    onClick={() => void runCurateNewRanked()}
+                  >
+                    New ranked
+                  </button>
+                  {curateResults.length > 0 && (
+                    <button type="button" className="secondary" onClick={() => setCurateResults([])}>
+                      Clear curated picks
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="hint">
                 Results are filtered client-side so at least one difficulty in the selected mode fits your star range.
@@ -1206,7 +1469,99 @@ export default function App() {
               )}
             </div>
 
+            {curateResults.length > 0 && (
+              <div className="panel panel-nested curate-results-panel">
+                <div className="panel-head">
+                  <h2>Curated picks</h2>
+                  <p className="panel-sub">Sets not detected in your Songs folder — import or save to a collection.</p>
+                </div>
+                <div className="results results-grid">
+                  {curateResults.map((raw) => {
+                    const set = raw as Record<string, unknown>;
+                    const covers = set.covers as Record<string, string> | undefined;
+                    const sid = Number(set.id);
+                    const disabledDl = (set.availability as { download_disabled?: boolean } | undefined)
+                      ?.download_disabled === true;
+                    const inColl = activeItems.some((c) => c.beatmapsetId === sid);
+                    const importingThis = directImportSetId === sid;
+                    const locallyPresent = localBeatmapsetIds.has(sid);
+                    return (
+                      <div key={`curate-${sid}`} className="result-card">
+                        <img src={covers?.list || covers?.card || ""} alt="" loading="lazy" />
+                        <div className="result-meta">
+                          <div className="title">{String(set.title)}</div>
+                          <div className="sub">
+                            {String(set.artist)} — mapped by {String(set.creator)}
+                          </div>
+                          {set.status != null && <span className="tag">{String(set.status)}</span>}
+                          {locallyPresent && <span className="tag tag-local">In Songs folder</span>}
+                        </div>
+                        <div className="result-actions">
+                          <button
+                            type="button"
+                            className="primary"
+                            disabled={
+                              disabledDl || locallyPresent || importingThis || directImportSetId !== null
+                            }
+                            onClick={() => void importFromSearch(sid)}
+                          >
+                            {locallyPresent
+                              ? "Already imported"
+                              : importingThis
+                                ? "Importing…"
+                                : "Import now"}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={!partyCanSend || disabledDl}
+                            onClick={() =>
+                              sendBeatmapToParty({
+                                beatmapsetId: sid,
+                                artist: String(set.artist ?? ""),
+                                title: String(set.title ?? ""),
+                                creator: String(set.creator ?? ""),
+                                coverUrl: covers?.list ?? covers?.card ?? null,
+                              })
+                            }
+                            title={
+                              partyCanSend
+                                ? "Leader: queue this set for everyone in the lobby"
+                                : "Create or join a lobby as leader"
+                            }
+                          >
+                            Send to party
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary"
+                            disabled={inColl}
+                            onClick={() => addToCollection(set)}
+                          >
+                            {inColl ? "In this collection" : "Add to collection"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="results results-grid">
+              {searchDisplayResults.length === 0 &&
+                rawResults.length > 0 &&
+                hideOwnedSearch &&
+                searchAttempted &&
+                !searching && (
+                  <div className="empty-state">
+                    <p className="empty-title">All hidden</p>
+                    <p className="empty-text">
+                      Every result is already in your Songs folder. Turn off &quot;Hide maps already in Songs folder&quot; to
+                      see them, or run Search again for different maps.
+                    </p>
+                  </div>
+                )}
               {rawResults.length === 0 && searchAttempted && !searching && (
                 <div className="empty-state">
                   <p className="empty-title">No beatmaps here</p>
@@ -1227,13 +1582,14 @@ export default function App() {
                   <p className="empty-text">Fetching results…</p>
                 </div>
               )}
-              {rawResults.map((raw) => {
+              {searchDisplayResults.map((raw) => {
                 const set = raw as Record<string, unknown>;
                 const covers = set.covers as Record<string, string> | undefined;
                 const sid = Number(set.id);
                 const disabledDl = (set.availability as { download_disabled?: boolean } | undefined)?.download_disabled === true;
                 const inColl = activeItems.some((c) => c.beatmapsetId === sid);
                 const importingThis = directImportSetId === sid;
+                const locallyPresent = localBeatmapsetIds.has(sid);
                 return (
                                    <div key={sid} className="result-card">
                     <img src={covers?.list || covers?.card || ""} alt="" loading="lazy" />
@@ -1243,15 +1599,22 @@ export default function App() {
                         {String(set.artist)} — mapped by {String(set.creator)}
                       </div>
                       {set.status != null && <span className="tag">{String(set.status)}</span>}
+                      {locallyPresent && <span className="tag tag-local">In Songs folder</span>}
                     </div>
                     <div className="result-actions">
                       <button
                         type="button"
                         className="primary"
-                        disabled={disabledDl || importingThis || directImportSetId !== null}
+                        disabled={
+                          disabledDl || locallyPresent || importingThis || directImportSetId !== null
+                        }
                         onClick={() => void importFromSearch(sid)}
                       >
-                        {importingThis ? "Importing…" : "Import now"}
+                        {locallyPresent
+                          ? "Already imported"
+                          : importingThis
+                            ? "Importing…"
+                            : "Import now"}
                       </button>
                       <button
                         type="button"
