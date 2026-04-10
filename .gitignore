@@ -15,6 +15,9 @@ src-tauri/target
 dist-ssr
 *.local
 
+# Tauri updater signing key (never commit)
+.tauri/osu-link.key
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

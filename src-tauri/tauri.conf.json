@@ -41,6 +41,15 @@
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENFMjdBMkQ1MEU5N0Y2QzMKUldURDlwY08xYUluemxCL1VyUzc4dzBHb20yY05SWjQrRVJFSHRMUXhHRU5yVDYzaWgzUFZ5b1IK",
+      "endpoints": [
+        "https://github.com/pclark0729/osu-link/releases/latest/download/latest.json"
+      ]
     }
   }
 }

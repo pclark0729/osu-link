@@ -18,6 +18,7 @@ import { parseLobbyCodeFromText } from "./party/parseLobbyCode";
 import { PartyPanel } from "./PartyPanel";
 import { NeuSelect } from "./NeuSelect";
 import { TitleBar } from "./TitleBar";
+import { runAutoUpdate } from "./autoUpdate";
 import "./App.css";
 
 type Mode = "osu" | "taiko" | "fruits" | "mania";
@@ -301,6 +302,10 @@ export default function App() {
   useEffect(() => {
     pushToastRef.current = pushToast;
   }, [pushToast]);
+
+  useEffect(() => {
+    void runAutoUpdate();
+  }, []);
 
   useEffect(() => {
     const client = new PartyClient(defaultPartyWsUrlFromSettings(undefined), (ev) => {
