@@ -19,6 +19,18 @@ Automatic updates use [Tauri’s updater](https://v2.tauri.app/plugin/updater/) 
 
 ## Cut a release
 
+### Option A — Release desktop workflow (recommended)
+
+1. Merge the code you want to ship (usually to `main`).  
+2. In GitHub: **Actions** → **Release desktop** → **Run workflow**.  
+3. Select the branch to ship (typically `main`).  
+4. Enter **version** as `X.Y.Z` only (e.g. `1.2.3`, no `v`). The workflow creates and pushes tag `vX.Y.Z` at that branch’s HEAD.  
+5. Wait for **publish-tauri** to start automatically (triggered by the new tag). When all matrix jobs succeed, the release includes **`latest.json`** and per-platform installers; the app can update users automatically.
+
+Optional **checkout ref**: branch name or commit SHA to tag instead of the branch you picked in the UI.
+
+### Option B — Tag from git
+
 1. Commit any code you want in the release.  
 2. Create and push an annotated or lightweight tag **`vX.Y.Z`** (semver, e.g. `v1.2.3`). Only tags matching `v*` trigger the workflow.  
 3. Wait for all matrix jobs (Windows, Linux, macOS arm64, macOS x64) to finish successfully. A failed job means that platform may be missing installers or updater files.  

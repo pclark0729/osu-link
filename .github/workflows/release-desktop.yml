@@ -1,0 +1,58 @@
+# One-click path to a full desktop release (GitHub Release + latest.json for the updater).
+#
+# 1. Merge your changes to the branch you want to ship (usually main).
+# 2. Actions → Release desktop → Run workflow: pick that branch, enter semver X.Y.Z (no "v").
+# 3. This job creates and pushes tag vX.Y.Z, which starts publish-tauri (matrix: Win/Linux/mac).
+# 4. When publish-tauri finishes, the release has installers and latest.json; clients update via
+#    plugins.updater.endpoints in src-tauri/tauri.conf.json.
+#
+# Requires: repo secrets TAURI_SIGNING_PRIVATE_KEY (+ password if used). See RELEASING.md.
+name: Release desktop
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver X.Y.Z only (no v). Must be newer than the last release tag you care about."
+        required: true
+        type: string
+      checkout_ref:
+        description: "Optional ref to tag (branch name or full SHA). Leave blank to use the branch selected below."
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: release-desktop-tag
+  cancel-in-progress: false
+
+jobs:
+  create-and-push-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.checkout_ref != '' && inputs.checkout_ref || github.ref }}
+
+      - name: Validate version and push tag
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${VERSION_INPUT}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must be X.Y.Z (three numbers), e.g. 1.2.3 — got '${VERSION_INPUT}'"
+            exit 1
+          fi
+          TAG="v${VERSION_INPUT}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists. Use a new version or delete the tag on the remote."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed ${TAG}. The publish-tauri workflow will build and attach latest.json + installers."
