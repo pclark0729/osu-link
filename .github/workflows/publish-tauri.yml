@@ -1,87 +1,71 @@
-# Build desktop installers and updater metadata (latest.json) for GitHub Releases.
-#
-# Signing (required for updater installs):
-# - Generate a key pair (see Tauri updater docs: `tauri signer generate`).
-# - Put the PUBLIC key in src-tauri/tauri.conf.json → plugins.updater.pubkey (committed).
-# - Put the PRIVATE key in repo secret TAURI_SIGNING_PRIVATE_KEY (same key that matches pubkey).
-# - If the private key is encrypted, set TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
-# Rotating keys: generate a new pair, update pubkey in tauri.conf.json, ship a new app build,
-# then use the new private key in CI for future releases.
-#
-# Before build, the app semver is taken from the git tag (v1.2.3 → 1.2.3) so latest.json
-# matches the release. If you only bump the tag but leave tauri.conf.json at 0.1.0, the
-# updater compares 0.1.0 == 0.1.0 and always reports "up to date".
-#
-# Release checklist: RELEASING.md
-name: publish-tauri
+Run npm run build:installer
+  
+> osu-link@1.0.3-dev.1 build:installer
+> node scripts/resolve-and-sync-version.mjs && node scripts/tauri-build-with-signing.mjs
+[resolve-version] Syncing app version to 1.0.3-dev.2
+v1.0.3-dev.2
+Synced Tauri/Cargo version to 1.0.3-dev.2
+(node:10104) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[tauri-build] CI: TAURI_SIGNING_PRIVATE_KEY set (348 chars)
+Using TAURI_SIGNING_PRIVATE_KEY from environment.
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm run build`
+> osu-link@1.0.3-dev.2 build
+> tsc && vite build
+vite v7.3.2 building client environment for production...
+transforming...
+✓ 695 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                                       0.47 kB │ gzip:   0.30 kB
+dist/assets/plus-jakarta-sans-vietnamese-400-normal-Cg2kxhWu.woff2    4.10 kB
+dist/assets/plus-jakarta-sans-vietnamese-800-normal-CxbopLd3.woff2    4.14 kB
+dist/assets/plus-jakarta-sans-vietnamese-600-normal-Y4VTTRme.woff2    4.20 kB
+dist/assets/plus-jakarta-sans-vietnamese-700-normal-CV6qDkkj.woff2    4.27 kB
+dist/assets/plus-jakarta-sans-vietnamese-500-normal-DiU8zqi-.woff2    4.28 kB
+dist/assets/plus-jakarta-sans-vietnamese-400-normal-B8TCSmUq.woff     5.60 kB
+dist/assets/plus-jakarta-sans-vietnamese-800-normal-BkoGl_sr.woff     5.69 kB
+dist/assets/plus-jakarta-sans-vietnamese-600-normal-5YsyKbU1.woff     5.74 kB
+dist/assets/plus-jakarta-sans-vietnamese-700-normal-BCh_uG_5.woff     5.78 kB
+dist/assets/plus-jakarta-sans-vietnamese-500-normal-CvE5C8T-.woff     5.79 kB
+dist/assets/plus-jakarta-sans-latin-ext-400-normal-D127hM_v.woff2    10.59 kB
+dist/assets/plus-jakarta-sans-latin-ext-800-normal-B6BjB2Ju.woff2    10.80 kB
+dist/assets/plus-jakarta-sans-latin-ext-500-normal-9VZagAe1.woff2    10.86 kB
+dist/assets/plus-jakarta-sans-latin-ext-600-normal-DQgPU_Cg.woff2    10.90 kB
+dist/assets/plus-jakarta-sans-latin-ext-700-normal-BajbvANd.woff2    11.01 kB
+dist/assets/plus-jakarta-sans-latin-400-normal-Dhut76fR.woff2        11.82 kB
+dist/assets/plus-jakarta-sans-latin-800-normal-CusIZhrK.woff2        11.90 kB
+dist/assets/plus-jakarta-sans-latin-600-normal-DLTa1BUW.woff2        12.19 kB
+dist/assets/plus-jakarta-sans-latin-700-normal-CfpNZvy6.woff2        12.24 kB
+dist/assets/plus-jakarta-sans-latin-500-normal-Bf-nb4oT.woff2        12.31 kB
+dist/assets/plus-jakarta-sans-latin-ext-400-normal-2ppkqaOR.woff     15.31 kB
+dist/assets/plus-jakarta-sans-latin-ext-800-normal-BPkb-LBK.woff     15.41 kB
+dist/assets/plus-jakarta-sans-latin-ext-600-normal-B0WRRYJ1.woff     15.61 kB
+dist/assets/plus-jakarta-sans-latin-ext-700-normal-8-d-IyIQ.woff     15.62 kB
+dist/assets/plus-jakarta-sans-latin-ext-500-normal-CqEEAICU.woff     15.62 kB
+dist/assets/plus-jakarta-sans-latin-400-normal-BDKaGhyp.woff         15.73 kB
+dist/assets/plus-jakarta-sans-latin-800-normal-BRNHt2w0.woff         15.78 kB
+dist/assets/plus-jakarta-sans-latin-600-normal-BR_Ojra4.woff         16.08 kB
+dist/assets/plus-jakarta-sans-latin-500-normal-DYtqi0QS.woff         16.12 kB
+dist/assets/plus-jakarta-sans-latin-700-normal-DqEcQeE5.woff         16.14 kB
 
-on:
-  push:
-    tags:
-      - "v*"
-
-jobs:
-  publish:
-    permissions:
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
-          - platform: ubuntu-22.04
-            args: ""
-          - platform: windows-latest
-            args: ""
-
-    runs-on: ${{ matrix.platform }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - name: Install npm dependencies
-        run: npm ci
-
-      - name: Sync app version from release tag (see scripts/resolve-and-sync-version.mjs)
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
-            echo "Tag must be vX.Y.Z (got $TAG)"
-            exit 1
-          fi
-          export RELEASE_VERSION="$VERSION"
-          node scripts/resolve-and-sync-version.mjs
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
-
-      - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: osu-link ${{ github.ref_name }}
-          releaseBody: See release assets to download installers. The desktop app checks this release for updates automatically.
-          releaseDraft: false
-          prerelease: false
-          updaterJsonPreferNsis: true
-          args: ${{ matrix.args }}
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+dist/assets/index-OC1pYJvm.css                                      107.16 kB │ gzip:  26.67 kB
+dist/assets/index-DuCNr8cP.js                                       843.64 kB │ gzip: 235.19 kB
+✓ built in 3.43s
+    Updating crates.io index
+   Compiling osu-link v1.0.3-dev.2 (D:\a\osu-link\osu-link\src-tauri)
+    Finished `release` profile [optimized] target(s) in 1m 49s
+       Built application at: D:\a\osu-link\osu-link\src-tauri\target\release\osu-link.exe
+        Info Patching D:\a\osu-link\osu-link\src-tauri\target\release\osu-link.exe with bundle type information: msi
+        Info Verifying wix package
+ Downloading https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip
+        Info validating hash
+        Info extracting WIX
+failed to bundle project `optional pre-release identifier in app version must be numeric-only and cannot be greater than 65535 for msi target`
+       Error failed to bundle project `optional pre-release identifier in app version must be numeric-only and cannot be greater than 65535 for msi target`
+Error: Process completed with exit code 1.
