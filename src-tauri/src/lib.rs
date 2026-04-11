@@ -127,22 +127,71 @@ fn get_local_beatmapset_ids() -> Result<Vec<i64>, String> {
 #[tauri::command]
 async fn download_and_import(set_id: i64, no_video: bool) -> Result<String, String> {
     let s = load_settings();
-    // Mirror download does not require OAuth; search still does.
-    let bytes = osu_api::download_beatmapset_bytes(set_id, no_video).await?;
-    if bytes.len() < 200 {
-        return Err("Download was too small — the server may have returned an error page. Check login or beatmap availability.".into());
-    }
-    if bytes.starts_with(br#"{"#) {
-        let head = String::from_utf8_lossy(&bytes[..bytes.len().min(400)]);
-        return Err(format!(
-            "Expected a beatmap archive but got JSON/text. Try again or check API access.\n{head}"
-        ));
-    }
-    let tmp = import::write_download_to_temp(&bytes)?;
     let songs = paths::resolve_beatmap_directory(s.beatmap_directory.as_deref())?;
-    let dest = import::extract_osz(&tmp, &songs)?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(dest.to_string_lossy().into_owned())
+    let urls = osu_api::mirror_download_urls(set_id, no_video);
+    let mut errors: Vec<String> = Vec::new();
+
+    for url in urls {
+        let bytes = match osu_api::download_bytes_from_url(&url).await {
+            Ok(b) => b,
+            Err(e) => {
+                errors.push(format!("{url}: {e}"));
+                continue;
+            }
+        };
+        if bytes.len() < 200 {
+            errors.push(format!(
+                "{url}: response too small ({} bytes)",
+                bytes.len()
+            ));
+            continue;
+        }
+        if bytes.starts_with(br#"{"#) {
+            let head = String::from_utf8_lossy(&bytes[..bytes.len().min(200)]);
+            errors.push(format!("{url}: expected archive, got JSON/text: {head}"));
+            continue;
+        }
+        if !import::looks_like_zip(&bytes) {
+            errors.push(format!(
+                "{url}: not a ZIP archive (incomplete or wrong content-type)"
+            ));
+            continue;
+        }
+
+        let tmp = match import::write_download_to_temp(&bytes) {
+            Ok(p) => p,
+            Err(e) => {
+                errors.push(format!("{url}: {e}"));
+                continue;
+            }
+        };
+
+        let dest = match import::extract_osz(&tmp, &songs, set_id) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                errors.push(format!("{url}: extract failed: {e}"));
+                continue;
+            }
+        };
+        let _ = std::fs::remove_file(&tmp);
+
+        match import::validate_beatmap_folder(&dest) {
+            Ok(()) => return Ok(dest.to_string_lossy().into_owned()),
+            Err(e) => {
+                if dest.is_dir() {
+                    let _ = std::fs::remove_dir_all(&dest);
+                }
+                errors.push(format!("{url}: {e}"));
+            }
+        }
+    }
+
+    Err(format!(
+        "Could not import a complete beatmap set after trying {} mirror(s).\n{}",
+        errors.len(),
+        errors.join("\n")
+    ))
 }
 
 #[tauri::command]

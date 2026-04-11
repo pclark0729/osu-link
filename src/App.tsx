@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -19,7 +20,8 @@ import { PartyPanel } from "./PartyPanel";
 import { NeuSelect } from "./NeuSelect";
 import { SocialPanel } from "./SocialPanel";
 import { TitleBar } from "./TitleBar";
-import { runAutoUpdate } from "./autoUpdate";
+import packageJson from "../package.json";
+import { checkForUpdatesAndInstall, runAutoUpdate, updaterAvailable } from "./autoUpdate";
 import "./App.css";
 
 type Mode = "osu" | "taiko" | "fruits" | "mania";
@@ -298,6 +300,8 @@ export default function App() {
   const [directImportSetId, setDirectImportSetId] = useState<number | null>(null);
   const [collectionNameDraft, setCollectionNameDraft] = useState("");
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("—");
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [searchAttempted, setSearchAttempted] = useState(false);
   const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
@@ -342,9 +346,44 @@ export default function App() {
     setToast({ tone, message });
   }, []);
 
+  const handleCheckForUpdates = useCallback(async () => {
+    setUpdateBusy(true);
+    try {
+      const r = await checkForUpdatesAndInstall();
+      switch (r.kind) {
+        case "skipped":
+          pushToast("error", "Updates are only available in the installed app (not dev or browser).");
+          break;
+        case "upToDate":
+          pushToast("success", "You're on the latest version.");
+          break;
+        case "cancelled":
+          break;
+        case "installed":
+          pushToast("success", `Installing ${r.version}…`);
+          break;
+        case "error":
+          pushToast("error", r.message);
+          break;
+      }
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, [pushToast]);
+
   useEffect(() => {
     pushToastRef.current = pushToast;
   }, [pushToast]);
+
+  useEffect(() => {
+    if (isTauri()) {
+      void getVersion()
+        .then(setAppVersion)
+        .catch(() => setAppVersion("—"));
+    } else {
+      setAppVersion(packageJson.version);
+    }
+  }, []);
 
   useEffect(() => {
     void runAutoUpdate();
@@ -1219,6 +1258,28 @@ export default function App() {
         {tab === "settings" && (
           <div className="panel panel-elevated">
             <div className="panel-head">
+              <h2>Application</h2>
+              <p className="panel-sub">
+                Current version <strong>{appVersion}</strong>. Updates use GitHub Releases (signed builds only).
+              </p>
+            </div>
+            <div className="row-actions" style={{ marginBottom: "1rem" }}>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!updaterAvailable() || updateBusy}
+                aria-busy={updateBusy}
+                onClick={() => void handleCheckForUpdates()}
+              >
+                {updateBusy ? "Checking…" : "Check for updates"}
+              </button>
+            </div>
+            {!updaterAvailable() && (
+              <p className="hint" style={{ marginBottom: "1rem" }}>
+                The updater runs in the packaged desktop app only (not in dev or the browser preview).
+              </p>
+            )}
+            <div className="panel-head">
               <h2>OAuth application</h2>
               <p className="panel-sub">Keys for the official search API (downloads use a public mirror).</p>
             </div>
@@ -1771,8 +1832,8 @@ export default function App() {
               </label>
             </div>
             <p className="hint">
-              Imports download <code>.osz</code> via a public mirror (not the osu! API) and extract into your Songs folder. If you
-              see 429, wait before retrying.
+              Imports download <code>.osz</code> via public mirrors (not the osu! API), verify audio is present, and fall back if a
+              mirror returns an incomplete archive. If you see 429, wait before retrying.
             </p>
             <div className="collection-list">
               {activeItems.length === 0 && (

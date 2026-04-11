@@ -3,12 +3,24 @@ use serde_json::Value;
 
 const API: &str = "https://osu.ppy.sh/api/v2";
 
-/// Community mirror base for `.osz` files. The official endpoint
+/// Community mirrors for `.osz` files. The official endpoint
 /// `GET /api/v2/beatmapsets/{id}/download` is registered with bare `require-scopes`
 /// middleware on osu-web, which only accepts tokens that have the `*` scope — that
 /// scope is not available to normal user OAuth apps (`public` + `identify`), so those
 /// requests fail with 403 `{"error":"Invalid scope(s) provided."}`.
-const BEATMAP_MIRROR_DOWNLOAD_BASE: &str = "https://catboy.best/d";
+///
+/// Order: try catboy (Mino) first, then Sayobot CDN — some sets are incomplete on one mirror.
+pub fn mirror_download_urls(set_id: i64, no_video: bool) -> Vec<String> {
+    let nv = if no_video { "1" } else { "0" };
+    vec![
+        format!("https://catboy.best/d/{set_id}?nv={nv}"),
+        if no_video {
+            format!("https://txy1.sayobot.cn/beatmaps/download/novideo/{set_id}")
+        } else {
+            format!("https://txy1.sayobot.cn/beatmaps/download/full/{set_id}")
+        },
+    ]
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchInput {
@@ -183,20 +195,17 @@ pub async fn api_user_recent_scores(
     res.json().await.map_err(|e| e.to_string())
 }
 
-/// Download beatmapset `.osz` from a public mirror (no OAuth).
-pub async fn download_beatmapset_bytes(set_id: i64, no_video: bool) -> Result<Vec<u8>, String> {
+/// Download bytes from a single mirror URL (redirects followed).
+pub async fn download_bytes_from_url(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(20))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let nv = if no_video { "1" } else { "0" };
-    let url = format!("{BEATMAP_MIRROR_DOWNLOAD_BASE}/{set_id}?nv={nv}");
-
     let mut last_429 = false;
     for attempt in 0u32..4u32 {
         let res = client
-            .get(&url)
+            .get(url)
             .header("User-Agent", "osu-link (https://github.com/osu-link; beatmap import)")
             .header("Accept", "application/octet-stream, application/x-osu-beatmap-archive, */*")
             .send()
