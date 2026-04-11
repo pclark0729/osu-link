@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { BeatmapResultCard } from "./BeatmapResultCard";
 import { NeuSelect } from "./NeuSelect";
 import {
   type Mode,
@@ -7,34 +8,16 @@ import {
   SEARCH_SORT_OPTIONS,
   topBeatmapIdForMode,
 } from "./searchTypes";
+import { serializePresetsForExport, type ResultsLayout } from "./searchPresetStorage";
 import type { SearchDownloadState } from "./useSearchDownloadState";
-import { formatAvgPp, useBeatmapAvgPp } from "./useBeatmapAvgPp";
-
-function AvgPpLine({
-  beatmapId,
-  avgPp,
-}: {
-  beatmapId: number | null;
-  avgPp: Record<number, number | null>;
-}) {
-  if (beatmapId == null) return null;
-  const v = avgPp[beatmapId];
-  return (
-    <div
-      className="result-meta-pp-cap"
-      title="Mean PP on osu! global top scores for this difficulty (actual scores, not a theoretical SS)."
-    >
-      Avg PP: {v === undefined ? "…" : v === null ? "—" : `${formatAvgPp(v)} pp`}
-    </div>
-  );
-}
+import { useBeatmapAvgPp } from "./useBeatmapAvgPp";
 
 export function SearchDownloadPanel({
   s,
-  variant,
+  onInspectSet,
 }: {
   s: SearchDownloadState;
-  variant: "main" | "overlay";
+  onInspectSet?: (raw: unknown) => void;
 }) {
   const {
     query,
@@ -89,7 +72,25 @@ export function SearchDownloadPanel({
     showPartyActions,
     showCollectionActions,
     localBeatmapsetIds,
+    presets,
+    applyPreset,
+    savePreset,
+    deletePreset,
+    renamePreset,
+    importPresetsFromJsonText,
+    resultsLayout,
+    setResultsLayout,
   } = s;
+
+  const [presetPickerValue, setPresetPickerValue] = useState("");
+  const [presetSaveName, setPresetSaveName] = useState("");
+  const [presetRenameValue, setPresetRenameValue] = useState("");
+  const presetImportRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const p = presets.find((x) => x.id === presetPickerValue);
+    setPresetRenameValue(p?.name ?? "");
+  }, [presetPickerValue, presets]);
 
   const avgPpBeatmapIds = useMemo(() => {
     const a = searchDisplayResults.map((r) => topBeatmapIdForMode(r, mode));
@@ -98,78 +99,270 @@ export function SearchDownloadPanel({
   }, [searchDisplayResults, curateResults, mode]);
   const avgPp = useBeatmapAvgPp(avgPpBeatmapIds, mode);
 
-  const panelClass =
-    variant === "overlay" ? "panel panel-elevated overlay-search-panel" : "panel panel-elevated";
+  const effectiveLayout: ResultsLayout = resultsLayout;
+
+  const resultsGridClass = [
+    "results",
+    "results-grid",
+    effectiveLayout === "compact" && "results-grid--compact",
+    effectiveLayout === "tiles" && "results-grid--tiles",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const presetOptions = useMemo(() => {
+    const base = [{ value: "", label: "— Preset —" }] as const;
+    return [...base, ...presets.map((p) => ({ value: p.id, label: p.name }))];
+  }, [presets]);
+
+  const onQueryKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    void runSearch(false);
+  };
 
   return (
     <>
-      <div className={panelClass}>
-        <div className="panel-head">
-          <h2>Search beatmaps</h2>
-          <p className="panel-sub">
-            Query the live osu! catalogue, then import or save sets to a collection.
-          </p>
-        </div>
-        {searchError && <div className="error-banner">{searchError}</div>}
-        <div className="grid-2">
-          <label className="field">
+      <div className="panel panel-elevated">
+        <div className="main-pane-sticky">
+          <div className="panel-head">
+            <h2>Search beatmaps</h2>
+            <p className="panel-sub">
+              Tune filters, then run Search. Imports add full sets (.osz) to your Songs folder or a collection.
+            </p>
+          </div>
+          <div className="search-toolbar-row">
+            <details className="disclosure-block search-presets-details">
+              <summary>
+                Search presets
+                {presets.length > 0 ? (
+                  <span className="disclosure-summary-meta"> {presets.length} saved</span>
+                ) : null}
+              </summary>
+              <div className="search-presets">
+                <label className="field search-presets-field">
+                  <span className="visually-hidden">Preset management</span>
+                  <div className="search-presets-controls">
+                    <NeuSelect
+                      id="search-presets-load"
+                      value={presetPickerValue}
+                      onChange={(v) => {
+                        if (v === "") {
+                          setPresetPickerValue("");
+                          return;
+                        }
+                        applyPreset(v);
+                        setPresetPickerValue(v);
+                      }}
+                      options={presetOptions}
+                      disabled={searching}
+                    />
+                    <label className="search-presets-inline-name">
+                      <span className="visually-hidden">New preset name</span>
+                      <input
+                        type="text"
+                        className="search-presets-name-input"
+                        placeholder="Preset name"
+                        autoComplete="off"
+                        value={presetSaveName}
+                        disabled={searching}
+                        onChange={(e) => setPresetSaveName(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={searching || presetSaveName.trim() === ""}
+                      onClick={() => {
+                        const id = savePreset(presetSaveName);
+                        if (id) {
+                          setPresetPickerValue(id);
+                          setPresetSaveName("");
+                        }
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={!presetPickerValue || searching}
+                      onClick={() => {
+                        if (!presetPickerValue) return;
+                        deletePreset(presetPickerValue);
+                        setPresetPickerValue("");
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                  <div className="search-presets-controls search-presets-row2">
+                    <label className="search-presets-inline-name search-presets-rename">
+                      <span className="visually-hidden">Rename preset</span>
+                      <input
+                        type="text"
+                        className="search-presets-name-input"
+                        placeholder="New name"
+                        autoComplete="off"
+                        value={presetRenameValue}
+                        disabled={searching || !presetPickerValue}
+                        onChange={(e) => setPresetRenameValue(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={searching || !presetPickerValue || presetRenameValue.trim() === ""}
+                      onClick={() => {
+                        if (!presetPickerValue) return;
+                        renamePreset(presetPickerValue, presetRenameValue);
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={searching}
+                      onClick={() => {
+                        const text = serializePresetsForExport(presets);
+                        const blob = new Blob([text], { type: "application/json;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = "osu-link-search-presets.json";
+                        a.rel = "noopener";
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      Export
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={searching}
+                      onClick={() => presetImportRef.current?.click()}
+                    >
+                      Import
+                    </button>
+                    <input
+                      ref={presetImportRef}
+                      type="file"
+                      accept="application/json,.json"
+                      className="visually-hidden"
+                      aria-hidden
+                      tabIndex={-1}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!f) return;
+                        void f.text().then((raw) => importPresetsFromJsonText(raw));
+                      }}
+                    />
+                  </div>
+                </label>
+              </div>
+            </details>
+            <div className="search-layout-toggle" role="group" aria-label="Results layout">
+              <span className="search-layout-label">Layout</span>
+              <div className="search-layout-buttons">
+                {(
+                  [
+                    ["comfortable", "Comfortable"],
+                    ["compact", "Compact"],
+                    ["tiles", "Tiles"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`search-layout-btn ${resultsLayout === value ? "active" : ""}`}
+                    aria-pressed={resultsLayout === value}
+                    onClick={() => setResultsLayout(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            </div>
+        <div className="search-hero-row">
+          <label className="field search-hero-query">
             <span>Query</span>
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onQueryKeyDown}
               placeholder="Artist, title, tags…"
             />
           </label>
-          <label className="field">
+          <label className="field search-hero-mode">
             <span>Mode</span>
             <NeuSelect
-              id={variant === "overlay" ? "search-mode-overlay" : "search-mode"}
+              id="search-mode"
               value={mode}
               onChange={(v) => setMode(v as Mode)}
               options={SEARCH_MODE_OPTIONS}
             />
           </label>
-          <label className="field">
+          <label className="field search-hero-section">
             <span>Section</span>
             <NeuSelect
-              id={variant === "overlay" ? "search-section-overlay" : "search-section"}
+              id="search-section"
               value={section}
               onChange={setSection}
               options={SEARCH_SECTION_OPTIONS}
             />
           </label>
-          <label className="field">
-            <span>Sort (default: most played)</span>
+          <label className="field search-hero-sort">
+            <span>Sort</span>
             <NeuSelect
-              id={variant === "overlay" ? "search-sort-overlay" : "search-sort"}
+              id="search-sort"
               value={sort}
               onChange={setSort}
               options={SEARCH_SORT_OPTIONS}
             />
           </label>
-          <label className="field">
-            <span>Min stars (filter)</span>
-            <input
-              type="number"
-              step="0.1"
-              value={minStars}
-              onChange={(e) => setMinStars(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span>Max stars (filter)</span>
-            <input
-              type="number"
-              step="0.1"
-              value={maxStars}
-              onChange={(e) => setMaxStars(e.target.value)}
-            />
-          </label>
+          <div className="search-hero-actions">
+            <button type="button" className="primary" disabled={searching} onClick={() => void runSearch(false)}>
+              {searching ? "Searching…" : "Search"}
+            </button>
+          </div>
         </div>
-        <details className="advanced">
-          <summary>Advanced filters (API params)</summary>
-          <div className="grid-2" style={{ marginTop: "0.75rem" }}>
+        </div>
+        {searchError && (
+          <div className="error-banner error-banner--recover" role="alert">
+            <span>{searchError}</span>
+            <button type="button" className="secondary" disabled={searching} onClick={() => void runSearch(false)}>
+              Try again
+            </button>
+          </div>
+        )}
+        <details className="disclosure-block search-advanced-filters">
+          <summary>More filters — star range, API ids, NSFW</summary>
+          <div className="grid-2 search-catalog-filters-grid">
+            <label className="field">
+              <span>Min stars</span>
+              <input
+                type="number"
+                step="0.1"
+                value={minStars}
+                onChange={(e) => setMinStars(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Max stars</span>
+              <input
+                type="number"
+                step="0.1"
+                value={maxStars}
+                onChange={(e) => setMaxStars(e.target.value)}
+              />
+            </label>
             <label className="field">
               <span>Genre id (g)</span>
               <input
@@ -210,16 +403,13 @@ export function SearchDownloadPanel({
                 placeholder="S.SH.X"
               />
             </label>
-            <label className="checkbox-row" style={{ alignSelf: "end" }}>
+            <label className="checkbox-row checkbox-row--align-end">
               <input type="checkbox" checked={nsfw} onChange={(e) => setNsfw(e.target.checked)} />
               Include NSFW
             </label>
           </div>
         </details>
-        <div className="row-actions">
-          <button type="button" className="primary" disabled={searching} onClick={() => void runSearch(false)}>
-            {searching ? "Searching…" : "Search"}
-          </button>
+        <div className="search-secondary-actions row-actions">
           <button
             type="button"
             className="secondary"
@@ -241,11 +431,10 @@ export function SearchDownloadPanel({
             Hide maps already in Songs folder
           </label>
         </div>
-        <div className="curate-panel">
-          <div className="curate-panel-title">Curate</div>
+        <details className="disclosure-block curate-panel">
+          <summary>Curate — maps you don&apos;t have yet</summary>
           <p className="hint curate-panel-desc">
-            Picks maps you don&apos;t have locally yet (same mode / star / advanced filters as above). Discover uses
-            your sort and shuffles; New ranked uses ranked sets sorted by most recently ranked.
+            Uses the same filters as search. Discover shuffles; New ranked picks latest ranked first.
           </p>
           {curateError && <div className="error-banner">{curateError}</div>}
           <div className="row-actions">
@@ -267,24 +456,27 @@ export function SearchDownloadPanel({
             </button>
             {curateResults.length > 0 && (
               <button type="button" className="secondary" onClick={() => setCurateResults([])}>
-                Clear curated picks
+                Clear picks
               </button>
             )}
           </div>
-        </div>
-        <p className="hint">
-          Results are filtered client-side so at least one difficulty in the selected mode fits your star range.
-          Downloads are full beatmap sets (.osz). After import, press <strong>F5</strong> in osu!stable song select if
-          needed.
-        </p>
-        {total != null && (
+        </details>
+        <details className="disclosure-block search-tips">
+          <summary>Search tips</summary>
           <p className="hint">
-            API total (before star filter): <strong>{total}</strong>
+            Star range filters by mode on the client. Imports are full sets (.osz); press <strong>F5</strong> in song
+            select if a new set doesn&apos;t appear.
+            {total != null && (
+              <>
+                {" "}
+                API total (pre-filter): <strong>{total}</strong>.
+              </>
+            )}
           </p>
-        )}
+        </details>
         {activeCollection && (
-          <p className="hint">
-            <strong>Add to collection:</strong> {activeCollection.name}
+          <p className="hint search-active-collection-hint">
+            <strong>Collection:</strong> {activeCollection.name}
           </p>
         )}
       </div>
@@ -293,81 +485,35 @@ export function SearchDownloadPanel({
         <div className="panel panel-nested curate-results-panel">
           <div className="panel-head">
             <h2>Curated picks</h2>
-            <p className="panel-sub">Sets not detected in your Songs folder — import or save to a collection.</p>
+            <p className="panel-sub">Not in Songs — import or save to a collection.</p>
           </div>
-          <div className="results results-grid">
+          <div className={resultsGridClass}>
             {curateResults.map((raw) => {
-              const set = raw as Record<string, unknown>;
-              const covers = set.covers as Record<string, string> | undefined;
-              const sid = Number(set.id);
-              const disabledDl =
-                (set.availability as { download_disabled?: boolean } | undefined)?.download_disabled === true;
-              const inColl = activeItems.some((c) => c.beatmapsetId === sid);
-              const importingThis = directImportSetId === sid;
-              const locallyPresent = localBeatmapsetIds.has(sid);
+              const sid = Number((raw as Record<string, unknown>).id);
               return (
-                <div key={`curate-${sid}`} className="result-card">
-                  <img src={covers?.list || covers?.card || ""} alt="" loading="lazy" />
-                  <div className="result-meta">
-                    <div className="title">{String(set.title)}</div>
-                    <div className="sub">
-                      {String(set.artist)} — mapped by {String(set.creator)}
-                    </div>
-                    <AvgPpLine beatmapId={topBeatmapIdForMode(raw, mode)} avgPp={avgPp} />
-                    {set.status != null && <span className="tag">{String(set.status)}</span>}
-                    {locallyPresent && <span className="tag tag-local">In Songs folder</span>}
-                  </div>
-                  <div className="result-actions">
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={disabledDl || locallyPresent || importingThis || directImportSetId !== null}
-                      onClick={() => void importFromSearch(sid)}
-                    >
-                      {locallyPresent ? "Already imported" : importingThis ? "Importing…" : "Import now"}
-                    </button>
-                    {showPartyActions && (
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={!partyCanSend || disabledDl}
-                        onClick={() =>
-                          sendBeatmapToParty({
-                            beatmapsetId: sid,
-                            artist: String(set.artist ?? ""),
-                            title: String(set.title ?? ""),
-                            creator: String(set.creator ?? ""),
-                            coverUrl: covers?.list ?? covers?.card ?? null,
-                          })
-                        }
-                        title={
-                          partyCanSend
-                            ? "Leader: queue this set for everyone in the lobby"
-                            : "Create or join a lobby as leader"
-                        }
-                      >
-                        Send to party
-                      </button>
-                    )}
-                    {showCollectionActions && (
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={inColl}
-                        onClick={() => addToCollection(set)}
-                      >
-                        {inColl ? "In this collection" : "Add to collection"}
-                      </button>
-                    )}
-                  </div>
-                </div>
+                <BeatmapResultCard
+                  key={`curate-${sid}`}
+                  raw={raw}
+                  mode={mode}
+                  avgPp={avgPp}
+                  directImportSetId={directImportSetId}
+                  activeItems={activeItems}
+                  localBeatmapsetIds={localBeatmapsetIds}
+                  importFromSearch={importFromSearch}
+                  onInspectSet={onInspectSet}
+                  sendBeatmapToParty={sendBeatmapToParty}
+                  addToCollection={addToCollection}
+                  showPartyActions={showPartyActions}
+                  showCollectionActions={showCollectionActions}
+                  partyCanSend={partyCanSend}
+                />
               );
             })}
           </div>
         </div>
       )}
 
-      <div className="results results-grid">
+      <div className={resultsGridClass} aria-busy={searching ? true : undefined} aria-live="polite">
         {searchDisplayResults.length === 0 &&
           rawResults.length > 0 &&
           hideOwnedSearch &&
@@ -385,7 +531,9 @@ export function SearchDownloadPanel({
           <div className="empty-state">
             <p className="empty-title">No beatmaps here</p>
             <p className="empty-text">
-              Try a wider star range, another section, or a shorter query. Maps with downloads disabled are hidden.
+              {query.trim() === ""
+                ? "Add a keyword in Query, or relax filters (section, star range, advanced). Very narrow filters can return nothing."
+                : "Try a wider star range, another section, or a shorter query. Maps with downloads disabled are hidden."}
             </p>
           </div>
         )}
@@ -396,76 +544,39 @@ export function SearchDownloadPanel({
           </div>
         )}
         {searching && rawResults.length === 0 && (
-          <div className="empty-state">
-            <div className="boot-spinner boot-spinner-inline" aria-hidden />
-            <p className="empty-text">Fetching results…</p>
-          </div>
+          <>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={`sk-${i}`} className="result-skeleton-card" aria-hidden>
+                <div className="result-skeleton-card__thumb" />
+                <div className="result-skeleton-card__lines">
+                  <div className="result-skeleton-card__line" />
+                  <div className="result-skeleton-card__line result-skeleton-card__line--short" />
+                </div>
+              </div>
+            ))}
+            <span className="visually-hidden">Fetching results</span>
+          </>
         )}
         {searchDisplayResults.map((raw) => {
           const set = raw as Record<string, unknown>;
-          const covers = set.covers as Record<string, string> | undefined;
           const sid = Number(set.id);
-          const disabledDl =
-            (set.availability as { download_disabled?: boolean } | undefined)?.download_disabled === true;
-          const inColl = activeItems.some((c) => c.beatmapsetId === sid);
-          const importingThis = directImportSetId === sid;
-          const locallyPresent = localBeatmapsetIds.has(sid);
           return (
-            <div key={sid} className="result-card">
-              <img src={covers?.list || covers?.card || ""} alt="" loading="lazy" />
-              <div className="result-meta">
-                <div className="title">{String(set.title)}</div>
-                <div className="sub">
-                  {String(set.artist)} — mapped by {String(set.creator)}
-                </div>
-                <AvgPpLine beatmapId={topBeatmapIdForMode(raw, mode)} avgPp={avgPp} />
-                {set.status != null && <span className="tag">{String(set.status)}</span>}
-                {locallyPresent && <span className="tag tag-local">In Songs folder</span>}
-              </div>
-              <div className="result-actions">
-                <button
-                  type="button"
-                  className="primary"
-                  disabled={disabledDl || locallyPresent || importingThis || directImportSetId !== null}
-                  onClick={() => void importFromSearch(sid)}
-                >
-                  {locallyPresent ? "Already imported" : importingThis ? "Importing…" : "Import now"}
-                </button>
-                {showPartyActions && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={!partyCanSend || disabledDl}
-                    onClick={() =>
-                      sendBeatmapToParty({
-                        beatmapsetId: sid,
-                        artist: String(set.artist ?? ""),
-                        title: String(set.title ?? ""),
-                        creator: String(set.creator ?? ""),
-                        coverUrl: covers?.list ?? covers?.card ?? null,
-                      })
-                    }
-                    title={
-                      partyCanSend
-                        ? "Leader: queue this set for everyone in the lobby"
-                        : "Create or join a lobby as leader"
-                    }
-                  >
-                    Send to party
-                  </button>
-                )}
-                {showCollectionActions && (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={inColl}
-                    onClick={() => addToCollection(set)}
-                  >
-                    {inColl ? "In this collection" : "Add to collection"}
-                  </button>
-                )}
-              </div>
-            </div>
+            <BeatmapResultCard
+              key={sid}
+              raw={raw}
+              mode={mode}
+              avgPp={avgPp}
+              directImportSetId={directImportSetId}
+              activeItems={activeItems}
+              localBeatmapsetIds={localBeatmapsetIds}
+              importFromSearch={importFromSearch}
+              onInspectSet={onInspectSet}
+              sendBeatmapToParty={sendBeatmapToParty}
+              addToCollection={addToCollection}
+              showPartyActions={showPartyActions}
+              showCollectionActions={showCollectionActions}
+              partyCanSend={partyCanSend}
+            />
           );
         })}
       </div>

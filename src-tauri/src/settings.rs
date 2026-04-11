@@ -21,19 +21,6 @@ pub struct Settings {
     /// Optional HTTPS base for social REST API (e.g. https://127.0.0.1:4681). If unset, derived from `party_server_url`.
     #[serde(default)]
     pub social_api_base_url: Option<String>,
-    /// Global shortcut to toggle the in-game overlay (Tauri format, e.g. `Ctrl+Shift+O`). `None` uses the default.
-    #[serde(default)]
-    pub overlay_hotkey: Option<String>,
-    /// Global shortcut to show (if hidden) and focus the overlay for keyboard input. `None` uses the default.
-    #[serde(default)]
-    pub overlay_focus_hotkey: Option<String>,
-    /// When false, the in-game overlay window and global overlay shortcuts are disabled.
-    #[serde(default = "default_overlay_enabled")]
-    pub overlay_enabled: bool,
-}
-
-fn default_overlay_enabled() -> bool {
-    true
 }
 
 impl Default for Settings {
@@ -45,9 +32,6 @@ impl Default for Settings {
             onboarding_completed: false,
             party_server_url: None,
             social_api_base_url: None,
-            overlay_hotkey: None,
-            overlay_focus_hotkey: None,
-            overlay_enabled: true,
         }
     }
 }

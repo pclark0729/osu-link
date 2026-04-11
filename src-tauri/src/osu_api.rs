@@ -127,6 +127,54 @@ pub async fn api_beatmap_scores(
     res.json().await.map_err(|e| e.to_string())
 }
 
+/// Full beatmap set (`GET /api/v2/beatmapsets/{beatmapset}`).
+pub async fn api_beatmapset(access_token: &str, beatmapset_id: i64) -> Result<Value, String> {
+    let url = format!("{API}/beatmapsets/{beatmapset_id}");
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    if !status.is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("beatmapset HTTP {status}: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
+/// User's score on a beatmap (`GET /api/v2/beatmaps/{id}/scores/users/{user}`). `None` when 404 (no play).
+pub async fn api_beatmap_user_best(
+    access_token: &str,
+    beatmap_id: i64,
+    user_id: i64,
+    ruleset: &str,
+) -> Result<Option<Value>, String> {
+    let url = format!("{API}/beatmaps/{beatmap_id}/scores/users/{user_id}");
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .query(&[("legacy_only", "0"), ("mode", ruleset)])
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("beatmap user score HTTP {status}: {t}"));
+    }
+    let v: Value = res.json().await.map_err(|e| e.to_string())?;
+    Ok(Some(v))
+}
+
 /// Mean `pp` among returned scores (approximates “average PP people get when this is a top play”).
 pub fn avg_pp_from_scores_json(value: &Value) -> Option<f64> {
     let scores = value.get("scores")?.as_array()?;
@@ -244,6 +292,40 @@ pub async fn api_user_recent_scores(
     if !res.status().is_success() {
         let t = res.text().await.unwrap_or_default();
         return Err(format!("/scores/recent failed: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
+/// Best or first-place scores (`GET /api/v2/users/{user}/scores/{best|first}`).
+pub async fn api_user_scores(
+    access_token: &str,
+    user_id: i64,
+    score_type: &str,
+    limit: u32,
+    mode: &str,
+    offset: Option<u32>,
+) -> Result<Value, String> {
+    let t = score_type.trim();
+    if t != "best" && t != "first" {
+        return Err("score_type must be \"best\" or \"first\".".into());
+    }
+    let lim = limit.min(100).max(1);
+    let client = reqwest::Client::new();
+    let mut req = client
+        .get(format!("{API}/users/{user_id}/scores/{t}"))
+        .query(&[
+            ("limit", lim.to_string()),
+            ("mode", mode.to_string()),
+        ])
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json");
+    if let Some(off) = offset {
+        req = req.query(&[("offset", off.to_string())]);
+    }
+    let res = req.send().await.map_err(|e| e.to_string())?;
+    if !res.status().is_success() {
+        let body = res.text().await.unwrap_or_default();
+        return Err(format!("/users/scores/{t} failed: {body}"));
     }
     res.json().await.map_err(|e| e.to_string())
 }

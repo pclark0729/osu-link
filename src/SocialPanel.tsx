@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { baselinePpPerStarFromBestScores, pickBestChallengePlay } from "./challengeScoring";
+import { notifyDesktop } from "./desktopNotify";
+import { BattlesPanel } from "./BattlesPanel";
 import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
 import { SocialLeaderboard } from "./SocialLeaderboard";
 
@@ -7,25 +10,6 @@ type SocialSub = "friends" | "activity" | "battles" | "challenges" | "leaderboar
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-}
-
-function scoreBeatmapsetId(s: Record<string, unknown>): number | null {
-  const bm = s.beatmap;
-  if (bm && typeof bm === "object") {
-    const n = Number((bm as Record<string, unknown>).beatmapset_id);
-    if (Number.isFinite(n)) return n;
-  }
-  const bs = s.beatmapset;
-  if (bs && typeof bs === "object") {
-    const n = Number((bs as Record<string, unknown>).id);
-    if (Number.isFinite(n)) return n;
-  }
-  return null;
-}
-
-function scoreTotalFromOsu(s: Record<string, unknown>): number | null {
-  const n = Number(s.score);
-  return Number.isFinite(n) ? n : null;
 }
 
 function extractOsuFriendsList(raw: unknown): unknown[] {
@@ -89,8 +73,12 @@ function osuWebFriendRows(raw: unknown): Array<{ osuId: number; label: string }>
 
 export function SocialPanel({
   onToast,
+  resolvedSocialApiBaseUrl,
+  socialApiIsOverride,
 }: {
   onToast: (tone: "info" | "success" | "error", message: string) => void;
+  resolvedSocialApiBaseUrl: string | null;
+  socialApiIsOverride: boolean;
 }) {
   const [sub, setSub] = useState<SocialSub>("friends");
   const [busy, setBusy] = useState(false);
@@ -117,15 +105,6 @@ export function SocialPanel({
   >([]);
   const [activityLoadErr, setActivityLoadErr] = useState<string | null>(null);
 
-  const [battles, setBattles] = useState<unknown[]>([]);
-  /** Friend osu id as string, or "" */
-  const [battleOpponentFriend, setBattleOpponentFriend] = useState("");
-  const [battleOpponentManual, setBattleOpponentManual] = useState("");
-  const [battleMapQuery, setBattleMapQuery] = useState("");
-  const [battleMapResults, setBattleMapResults] = useState<Array<{ id: number; title: string; artist: string }>>([]);
-  const [battleMapSearching, setBattleMapSearching] = useState(false);
-  const [battlePick, setBattlePick] = useState<{ id: number; title: string; artist: string } | null>(null);
-
   const [challenges, setChallenges] = useState<unknown[]>([]);
   const [challengeMapQuery, setChallengeMapQuery] = useState("");
   const [challengeMapResults, setChallengeMapResults] = useState<Array<{ id: number; title: string; artist: string }>>([]);
@@ -134,11 +113,21 @@ export function SocialPanel({
   const [challengeSelectValue, setChallengeSelectValue] = useState("");
   const [chDeadlinePreset, setChDeadlinePreset] = useState("");
   const [chDeadlineCustom, setChDeadlineCustom] = useState("");
+  const [challengeDiffOptions, setChallengeDiffOptions] = useState<NeuSelectOption[]>([
+    { value: "", label: "Any difficulty" },
+  ]);
+  const [challengeDiffValue, setChallengeDiffValue] = useState("");
 
   const [leaderboardSignal, setLeaderboardSignal] = useState(0);
+  const [battleRefreshSignal, setBattleRefreshSignal] = useState(0);
+  /** After first {@link runRefresh} completes so friend-request notifications skip the initial snapshot. */
+  const [socialFriendsLoadDone, setSocialFriendsLoadDone] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const battlePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const challengePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const friendNotifySeenIdsRef = useRef<Set<number>>(new Set());
+  const friendNotifyBootstrappedRef = useRef(false);
+  const prevSocialApiBaseUrlRef = useRef<string | null | undefined>(undefined);
 
   const socialGet = useCallback(async (path: string) => {
     return invoke<unknown>("social_api_get", { path });
@@ -240,12 +229,6 @@ export function SocialPanel({
     }
   }, [socialGet]);
 
-  const refreshBattles = useCallback(async () => {
-    const j = asRecord(await socialGet("/api/v1/battles"));
-    const b = j.battles;
-    setBattles(Array.isArray(b) ? b : []);
-  }, [socialGet]);
-
   const refreshChallenges = useCallback(async () => {
     const j = asRecord(await socialGet("/api/v1/challenges"));
     const c = j.challenges;
@@ -260,7 +243,6 @@ export function SocialPanel({
       // Do not block osu! website friends on party-server `/friends` (missing URL or API errors).
       await Promise.all([refreshLocalFriends(), loadOsuFriends()]);
       if (sub === "activity") await refreshActivity();
-      if (sub === "battles") await refreshBattles();
       if (sub === "challenges") await refreshChallenges();
       if (sub === "leaderboard") setLeaderboardSignal((s) => s + 1);
     } catch (e) {
@@ -269,6 +251,8 @@ export function SocialPanel({
       onToast("error", msg);
     } finally {
       setBusy(false);
+      setSocialFriendsLoadDone(true);
+      setBattleRefreshSignal((s) => s + 1);
     }
   }, [
     refreshMe,
@@ -276,7 +260,6 @@ export function SocialPanel({
     refreshLocalFriends,
     loadOsuFriends,
     refreshActivity,
-    refreshBattles,
     refreshChallenges,
     sub,
     onToast,
@@ -285,6 +268,27 @@ export function SocialPanel({
   useEffect(() => {
     void runRefresh();
   }, []);
+
+  useEffect(() => {
+    if (prevSocialApiBaseUrlRef.current === undefined) {
+      prevSocialApiBaseUrlRef.current = resolvedSocialApiBaseUrl;
+      return;
+    }
+    if (prevSocialApiBaseUrlRef.current === resolvedSocialApiBaseUrl) return;
+    prevSocialApiBaseUrlRef.current = resolvedSocialApiBaseUrl;
+    friendNotifyBootstrappedRef.current = false;
+    friendNotifySeenIdsRef.current = new Set();
+    setSocialFriendsLoadDone(false);
+    if (resolvedSocialApiBaseUrl) void runRefresh();
+  }, [resolvedSocialApiBaseUrl, runRefresh]);
+
+  useEffect(() => {
+    if (!resolvedSocialApiBaseUrl) return;
+    const id = window.setInterval(() => {
+      void refreshLocalFriends().catch(() => {});
+    }, 90_000);
+    return () => window.clearInterval(id);
+  }, [resolvedSocialApiBaseUrl, refreshLocalFriends]);
 
   useEffect(() => {
     if (sub !== "activity") {
@@ -307,9 +311,8 @@ export function SocialPanel({
   }, [sub, refreshActivity]);
 
   useEffect(() => {
-    if (sub === "battles") void refreshBattles().catch(() => {});
     if (sub === "challenges") void refreshChallenges().catch(() => {});
-  }, [sub, refreshBattles, refreshChallenges]);
+  }, [sub, refreshChallenges]);
 
   useEffect(() => {
     if (sub !== "battles" && sub !== "leaderboard" && sub !== "challenges") return;
@@ -318,57 +321,20 @@ export function SocialPanel({
   }, [sub, refreshLocalFriends, loadOsuFriends]);
 
   useEffect(() => {
-    if (sub !== "battles") {
-      if (battlePollRef.current) {
-        clearInterval(battlePollRef.current);
-        battlePollRef.current = null;
+    if (sub !== "challenges") {
+      if (challengePollRef.current) {
+        clearInterval(challengePollRef.current);
+        challengePollRef.current = null;
       }
       return;
     }
-    battlePollRef.current = setInterval(() => {
-      void refreshBattles().catch(() => {});
+    challengePollRef.current = setInterval(() => {
+      void refreshChallenges().catch(() => {});
     }, 15_000);
     return () => {
-      if (battlePollRef.current) clearInterval(battlePollRef.current);
+      if (challengePollRef.current) clearInterval(challengePollRef.current);
     };
-  }, [sub, refreshBattles]);
-
-  useEffect(() => {
-    if (sub !== "battles") return;
-    const q = battleMapQuery.trim();
-    if (q.length < 2) {
-      setBattleMapResults([]);
-      return;
-    }
-    const t = setTimeout(() => {
-      void (async () => {
-        setBattleMapSearching(true);
-        try {
-          const res = await invoke<Record<string, unknown>>("search_beatmapsets", {
-            input: { q, s: "ranked", sort: "plays_desc", m: 0 },
-          });
-          const sets = (res.beatmapsets as unknown[]) || [];
-          const out: Array<{ id: number; title: string; artist: string }> = [];
-          for (const x of sets.slice(0, 12)) {
-            const r = asRecord(x);
-            const id = Number(r.id);
-            if (!Number.isFinite(id)) continue;
-            out.push({
-              id,
-              title: String(r.title ?? ""),
-              artist: String(r.artist ?? ""),
-            });
-          }
-          setBattleMapResults(out);
-        } catch {
-          setBattleMapResults([]);
-        } finally {
-          setBattleMapSearching(false);
-        }
-      })();
-    }, 380);
-    return () => clearTimeout(t);
-  }, [battleMapQuery, sub]);
+  }, [sub, refreshChallenges]);
 
   useEffect(() => {
     if (sub !== "challenges") return;
@@ -414,6 +380,51 @@ export function SocialPanel({
       setChallengeSelectValue("");
     }
   }, [challengeMapResults, challengePick]);
+
+  useEffect(() => {
+    if (!challengePick) {
+      setChallengeDiffOptions([{ value: "", label: "Any difficulty" }]);
+      setChallengeDiffValue("");
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId: challengePick.id });
+        const root = asRecord(raw);
+        const bms = root.beatmaps;
+        const opts: NeuSelectOption[] = [{ value: "", label: "Any difficulty (relative PP)" }];
+        if (Array.isArray(bms)) {
+          for (const x of bms) {
+            const bm = asRecord(x);
+            if (String(bm.mode ?? "") !== "osu") continue;
+            const st = String(bm.status ?? "").toLowerCase();
+            if (st && st !== "ranked") continue;
+            const id = Number(bm.id);
+            const stars = Number(bm.difficulty_rating);
+            const ver = String(bm.version ?? "Beatmap").trim() || "Beatmap";
+            if (!Number.isFinite(id)) continue;
+            opts.push({
+              value: String(id),
+              label: Number.isFinite(stars) ? `${ver} (${stars.toFixed(1)}★)` : ver,
+            });
+          }
+        }
+        if (!cancelled) {
+          setChallengeDiffOptions(opts);
+          setChallengeDiffValue("");
+        }
+      } catch {
+        if (!cancelled) {
+          setChallengeDiffOptions([{ value: "", label: "Any difficulty" }]);
+          setChallengeDiffValue("");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [challengePick]);
 
   const [targetId, setTargetId] = useState("");
 
@@ -462,84 +473,6 @@ export function SocialPanel({
     }
   };
 
-  const createBattle = async () => {
-    const opp =
-      battleOpponentFriend !== "" ? Number(battleOpponentFriend) : Number(battleOpponentManual.trim());
-    if (!battlePick || !Number.isFinite(opp)) {
-      onToast("error", "Choose an opponent and a beatmap from search.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await socialPost("/api/v1/battles", {
-        opponentOsuId: opp,
-        beatmapsetId: battlePick.id,
-      });
-      onToast("success", "Battle created — you have 48 hours to submit scores.");
-      setBattleMapQuery("");
-      setBattleMapResults([]);
-      setBattlePick(null);
-      await refreshBattles();
-    } catch (e) {
-      onToast("error", String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitBattleFromOsu = async (battleId: number, beatmapsetId: number) => {
-    const uid = meId ?? oauthOsuId;
-    if (uid == null) {
-      onToast("error", "Sign in with osu! so we can read your recent scores.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const raw = await invoke<unknown>("osu_user_recent_scores", { userId: uid, limit: 100, mode: "osu" });
-      const list = Array.isArray(raw) ? raw : [];
-      let best: number | null = null;
-      for (const item of list) {
-        const s = asRecord(item);
-        const sid = scoreBeatmapsetId(s);
-        if (sid !== beatmapsetId) continue;
-        const tot = scoreTotalFromOsu(s);
-        if (tot == null) continue;
-        if (best == null || tot > best) best = tot;
-      }
-      if (best == null) {
-        onToast(
-          "error",
-          "No recent osu! score on this beatmap set. Play it in osu! (stable), then use “Submit from osu!” again.",
-        );
-        return;
-      }
-      await socialPost(`/api/v1/battles/${battleId}/submit`, { score: best, mods: 0 });
-      onToast("success", `Submitted score ${best.toLocaleString()} from your osu! recent scores.`);
-      await refreshBattles();
-    } catch (e) {
-      onToast("error", String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const submitBattleManual = async (battleId: number) => {
-    const raw = window.prompt("Enter your score (honor system):");
-    if (raw == null) return;
-    const score = Number(raw.replace(/,/g, ""));
-    if (!Number.isFinite(score)) return;
-    setBusy(true);
-    try {
-      await socialPost(`/api/v1/battles/${battleId}/submit`, { score, mods: 0 });
-      onToast("success", "Score submitted.");
-      await refreshBattles();
-    } catch (e) {
-      onToast("error", String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const createChallenge = async () => {
     if (!challengePick) {
       onToast("error", "Search and select a ranked beatmap set.");
@@ -563,13 +496,18 @@ export function SocialPanel({
     }
     setBusy(true);
     try {
-      await socialPost("/api/v1/challenges", {
+      const body: Record<string, unknown> = {
         beatmapsetId: challengePick.id,
         deadlineMs,
         rulesJson: {
           display: { title: challengePick.title, artist: challengePick.artist },
         },
-      });
+      };
+      if (challengeDiffValue.trim()) {
+        const bid = Number(challengeDiffValue);
+        if (Number.isFinite(bid)) body.beatmapId = bid;
+      }
+      await socialPost("/api/v1/challenges", body);
       onToast("success", "Challenge created.");
       setChallengeMapQuery("");
       setChallengeMapResults([]);
@@ -577,6 +515,7 @@ export function SocialPanel({
       setChallengeSelectValue("");
       setChDeadlinePreset("");
       setChDeadlineCustom("");
+      setChallengeDiffValue("");
       await refreshChallenges();
     } catch (e) {
       onToast("error", String(e));
@@ -598,33 +537,49 @@ export function SocialPanel({
     }
   };
 
-  const submitChallengeFromOsu = async (challengeId: number, beatmapsetId: number) => {
+  const submitChallengeFromOsu = async (
+    challengeId: number,
+    beatmapsetId: number,
+    fixedBeatmapId: number | null,
+  ) => {
     if (meId == null) {
       onToast("error", "Sign in with osu! so we can read your recent scores.");
       return;
     }
     setBusy(true);
     try {
-      const raw = await invoke<unknown>("osu_user_recent_scores", { userId: meId, limit: 100, mode: "osu" });
-      const list = Array.isArray(raw) ? raw : [];
-      let best: number | null = null;
-      for (const item of list) {
-        const s = asRecord(item);
-        const sid = scoreBeatmapsetId(s);
-        if (sid !== beatmapsetId) continue;
-        const tot = scoreTotalFromOsu(s);
-        if (tot == null) continue;
-        if (best == null || tot > best) best = tot;
-      }
-      if (best == null) {
+      const bestRaw = await invoke<unknown>("osu_user_best_scores", {
+        userId: meId,
+        limit: 100,
+        mode: "osu",
+      });
+      const baseline = baselinePpPerStarFromBestScores(bestRaw);
+      const recentRaw = await invoke<unknown>("osu_user_recent_scores", { userId: meId, limit: 100, mode: "osu" });
+      const picked = pickBestChallengePlay(recentRaw, beatmapsetId, {
+        fixedBeatmapId,
+        baselinePpPerStar: baseline,
+      });
+      if (picked == null) {
         onToast(
           "error",
-          "No recent osu! score on this beatmap set. Play it in osu! (stable), then use “Submit from osu!” again.",
+          "No recent ranked score on this challenge (need PP on the map). Play in osu! (stable), then try again.",
         );
         return;
       }
-      await socialPost(`/api/v1/challenges/${challengeId}/submit`, { score: best, mods: 0 });
-      onToast("success", `Submitted score ${best.toLocaleString()} from your osu! recent scores.`);
+      await socialPost(`/api/v1/challenges/${challengeId}/submit`, {
+        score: picked.score,
+        mods: 0,
+        rankValue: picked.rankValue,
+        pp: picked.pp,
+        stars: picked.stars,
+        playBeatmapId: picked.playBeatmapId,
+        baselinePpPerStar: picked.baselinePpPerStar,
+        isUnweighted: false,
+      });
+      onToast(
+        "success",
+        `Submitted ${picked.pp.toFixed(0)}pp (${picked.rankValue.toFixed(2)}× vs your baseline) from osu! recent scores.`,
+      );
       await refreshChallenges();
     } catch (e) {
       onToast("error", String(e));
@@ -634,14 +589,16 @@ export function SocialPanel({
   };
 
   const submitChallengeManual = async (id: number) => {
-    const raw = window.prompt("Enter your score (honor system):");
+    const raw = window.prompt(
+      "Enter your game score (honor system). Manual entries are unweighted raw score and rank below PP-weighted osu! submits.",
+    );
     if (raw == null) return;
     const score = Number(raw.replace(/,/g, ""));
     if (!Number.isFinite(score)) return;
     setBusy(true);
     try {
-      await socialPost(`/api/v1/challenges/${id}/submit`, { score, mods: 0 });
-      onToast("success", "Score submitted.");
+      await socialPost(`/api/v1/challenges/${id}/submit`, { score, mods: 0, isUnweighted: true });
+      onToast("success", "Raw score submitted (unweighted).");
       await refreshChallenges();
     } catch (e) {
       onToast("error", String(e));
@@ -654,6 +611,25 @@ export function SocialPanel({
 
   /** Party-server id when linked; otherwise osu! OAuth `/me` so the leaderboard always includes you when signed in. */
   const selfOsuId = useMemo(() => meId ?? oauthOsuId, [meId, oauthOsuId]);
+
+  useEffect(() => {
+    if (!resolvedSocialApiBaseUrl || selfOsuId == null || !socialFriendsLoadDone) return;
+    const incoming = localFriends.filter((f) => f.status === "pending" && f.requestedBy !== selfOsuId);
+    if (!friendNotifyBootstrappedRef.current) {
+      for (const f of incoming) {
+        friendNotifySeenIdsRef.current.add(f.friendshipId);
+      }
+      friendNotifyBootstrappedRef.current = true;
+      return;
+    }
+    for (const f of incoming) {
+      if (!friendNotifySeenIdsRef.current.has(f.friendshipId)) {
+        friendNotifySeenIdsRef.current.add(f.friendshipId);
+        const label = f.username?.trim() ? f.username : `User ${f.osuId}`;
+        void notifyDesktop("osu-link — Friend request", `${label} wants to connect`);
+      }
+    }
+  }, [localFriends, selfOsuId, resolvedSocialApiBaseUrl, socialFriendsLoadDone]);
 
   const displayNameForOsu = useCallback(
     (osuId: number) => {
@@ -719,14 +695,62 @@ export function SocialPanel({
 
   const osuFriendsList = extractOsuFriendsList(osuFriendsRaw);
 
+  const socialApiHostLabel = useMemo(() => {
+    const u = resolvedSocialApiBaseUrl?.trim();
+    if (!u) return null;
+    try {
+      return new URL(u).host;
+    } catch {
+      return u;
+    }
+  }, [resolvedSocialApiBaseUrl]);
+
   return (
     <div className="panel panel-elevated">
       <div className="panel-head">
         <h2>Social</h2>
+        <p className="panel-sub">
+          Needs the social server; osu! web friends require <code className="inline-code">friends.read</code> in OAuth.
+        </p>
+      </div>
+
+      <div className="social-api-status-compact">
+        <span
+          className={`social-api-dot ${resolvedSocialApiBaseUrl ? "social-api-dot--on" : "social-api-dot--off"}`}
+          title={resolvedSocialApiBaseUrl ? "API base URL set" : "No API URL"}
+          aria-hidden
+        />
+        <span className="social-api-status-text">
+          <strong className="social-api-status-label">API</strong>{" "}
+          {socialApiHostLabel ?? (
+            <span className="social-api-status-missing">Not configured</span>
+          )}
+          {socialApiHostLabel ? (
+            <span className="social-api-status-source">
+              {" "}
+              · {socialApiIsOverride ? "Settings override" : "from party URL"}
+            </span>
+          ) : null}
+        </span>
+        <details className="social-api-details">
+          <summary>Details</summary>
+          <div className="party-server-status party-server-status--nested">
+            <dl className="party-server-status-grid">
+              <dt>API base</dt>
+              <dd>{resolvedSocialApiBaseUrl ?? "—"}</dd>
+              <dt>Source</dt>
+              <dd>{socialApiIsOverride ? "Settings override" : "Derived from party WebSocket URL"}</dd>
+            </dl>
+            <p className="hint party-status-meta social-api-settings-hint">
+              Override URL in <strong>Settings</strong> if needed.
+            </p>
+          </div>
+        </details>
       </div>
 
       {err && <div className="error-banner">{err}</div>}
 
+      <div className="social-panel-body" aria-busy={busy ? true : undefined}>
       <div className="social-tab-bar" role="tablist" aria-label="Social sections">
         <div className="social-tab-group">
           {(
@@ -783,55 +807,61 @@ export function SocialPanel({
                 </div>
               </div>
             </div>
-            <ul className="social-list social-friend-list">
-              {localFriends.map((f) => (
-                <li key={f.friendshipId} className="social-friend-row">
-                  <div className="social-friend-meta">
-                    <span className="social-friend-name">{f.username}</span>
-                    <span className="social-friend-id">({f.osuId})</span>
-                    <span className={`social-status social-status-${f.status}`}>{f.status}</span>
-                  </div>
-                  <div className="social-friend-actions">
-                    {f.status === "pending" && f.requestedBy !== selfOsuId && (
-                      <button type="button" className="secondary small-btn" onClick={() => void acceptFriend(f.friendshipId)}>
-                        Accept
-                      </button>
-                    )}
-                {isAcceptedFriendStatus(f.status) && (
-                  <button type="button" className="danger small-btn" onClick={() => void removeFriend(f.osuId)}>
-                    Remove
-                  </button>
-                )}
-                  </div>
-                </li>
-              ))}
-              {localFriends.length === 0 && (
-                <li className="hint social-list-empty">No entries yet.</li>
-              )}
-            </ul>
+            {localFriends.length > 0 ? (
+              <ul className="social-list social-friend-list">
+                {localFriends.map((f) => (
+                  <li key={f.friendshipId} className="social-friend-row">
+                    <div className="social-friend-meta">
+                      <span className="social-friend-name">{f.username}</span>
+                      <span className="social-friend-id">({f.osuId})</span>
+                      <span className={`social-status social-status-${f.status}`}>{f.status}</span>
+                    </div>
+                    <div className="social-friend-actions">
+                      {f.status === "pending" && f.requestedBy !== selfOsuId && (
+                        <button type="button" className="secondary small-btn" onClick={() => void acceptFriend(f.friendshipId)}>
+                          Accept
+                        </button>
+                      )}
+                      {isAcceptedFriendStatus(f.status) && (
+                        <button type="button" className="danger small-btn" onClick={() => void removeFriend(f.osuId)}>
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="social-card social-empty-card">
+                <p className="hint social-empty-card-text">No server friendships yet. Send a request above, or wait for one to arrive.</p>
+              </div>
+            )}
           </div>
 
           <div className="social-subsection">
             <h3 className="social-h3">osu! website friends</h3>
             <p className="hint social-subsection-hint">Requires OAuth re-login with friends.read.</p>
             {osuFriendsErr && <div className="error-banner">{osuFriendsErr}</div>}
-            <ul className="social-list social-friend-list social-osu-web-list">
-              {osuFriendsList.map((u: unknown, i: number) => {
-                const r = asRecord(u);
-                const target = asRecord(r.target ?? r);
-                const id = Number(target.id ?? r.id);
-                const name = String(target.username ?? r.username ?? "—");
-                return (
-                  <li key={typeof id === "number" && !Number.isNaN(id) ? id : i} className="social-friend-row social-osu-web-row">
-                    <span className="social-friend-name">{name}</span>
-                    {Number.isFinite(id) ? <span className="social-friend-id">{id}</span> : null}
-                  </li>
-                );
-              })}
-              {osuFriendsList.length === 0 && (
-                <li className="hint social-list-empty">None loaded.</li>
-              )}
-            </ul>
+            {osuFriendsList.length > 0 ? (
+              <ul className="social-list social-friend-list social-osu-web-list">
+                {osuFriendsList.map((u: unknown, i: number) => {
+                  const r = asRecord(u);
+                  const target = asRecord(r.target ?? r);
+                  const id = Number(target.id ?? r.id);
+                  const name = String(target.username ?? r.username ?? "—");
+                  return (
+                    <li key={typeof id === "number" && !Number.isNaN(id) ? id : i} className="social-friend-row social-osu-web-row">
+                      <span className="social-friend-name">{name}</span>
+                      {Number.isFinite(id) ? <span className="social-friend-id">{id}</span> : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <div className="social-card social-empty-card">
+                <p className="hint social-empty-card-text">None loaded. Re-sign in with osu! if you need website friends here.</p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -840,194 +870,53 @@ export function SocialPanel({
         <div className="social-section social-activity-section">
           {activityLoadErr && <div className="error-banner">{activityLoadErr}</div>}
           <p className="hint social-activity-intro">Latest actions from your social server (updates every ~12s while this tab is open).</p>
-          <ul className="social-list social-activity-list">
-            {activityEvents.map((e) => (
-              <li key={e.id} className="social-activity-row">
-                <div className="social-activity-head">
-                  <span className="tag social-activity-type">{e.type}</span>
-                  <span className="social-activity-actor">User {e.actor_osu_id}</span>
-                  <time className="social-activity-time" dateTime={new Date(e.created_at).toISOString()}>
-                    {new Date(e.created_at).toLocaleString()}
-                  </time>
-                </div>
-                {e.payload && <pre className="social-payload">{e.payload}</pre>}
-              </li>
-            ))}
-            {activityEvents.length === 0 && (
-              <li className="hint social-list-empty">No visible events yet.</li>
-            )}
-          </ul>
+          {activityEvents.length > 0 ? (
+            <ul className="social-list social-activity-list">
+              {activityEvents.map((e) => (
+                <li key={e.id} className="social-activity-row">
+                  <div className="social-activity-head">
+                    <span className="tag social-activity-type">{e.type}</span>
+                    <span className="social-activity-actor">User {e.actor_osu_id}</span>
+                    <time className="social-activity-time" dateTime={new Date(e.created_at).toISOString()}>
+                      {new Date(e.created_at).toLocaleString()}
+                    </time>
+                  </div>
+                  {e.payload && <pre className="social-payload">{e.payload}</pre>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="social-card social-empty-card">
+              <p className="hint social-empty-card-text">No visible events yet. Activity will show here as friends interact on the server.</p>
+            </div>
+          )}
         </div>
       )}
 
       {sub === "battles" && (
-        <div className="social-section social-battle-section">
-          <p className="hint social-battle-intro">
-            Pick someone to battle and a ranked map. The time window (48 hours) and score submission from your osu!
-            profile are handled for you.
-          </p>
-          <div className="social-card social-battle-form">
-            <div className="grid-2">
-              <label className="field">
-                <span>Opponent</span>
-                <NeuSelect
-                  value={battleOpponentFriend}
-                  disabled={busy}
-                  options={friendSelectOptions}
-                  onChange={(v) => {
-                    setBattleOpponentFriend(v);
-                    if (v) setBattleOpponentManual("");
-                  }}
-                />
-              </label>
-              <label className="field">
-                <span>Or osu! user id</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={battleOpponentManual}
-                  onChange={(e) => {
-                    setBattleOpponentManual(e.target.value);
-                    if (e.target.value.trim()) setBattleOpponentFriend("");
-                  }}
-                  placeholder="Anyone not in the list"
-                />
-              </label>
-            </div>
-            <div className="battle-map-panel">
-              <div className="battle-map-panel-header">
-                <span className="battle-map-panel-title">Map</span>
-                <span className="battle-map-panel-sub">Ranked beatmaps · search by artist or title</span>
-              </div>
-              <label className="field battle-map-search-field">
-                <span>Search</span>
-                <input
-                  type="text"
-                  value={battleMapQuery}
-                  onChange={(e) => setBattleMapQuery(e.target.value)}
-                  placeholder="Type at least 2 characters…"
-                  autoComplete="off"
-                />
-              </label>
-              {battleMapSearching && (
-                <p className="hint battle-map-search-status" aria-live="polite">
-                  Searching…
-                </p>
-              )}
-              {battleMapResults.length > 0 && (
-                <div className="battle-map-results-wrap">
-                  <span className="battle-map-results-label">Results</span>
-                  <ul className="battle-map-pick-list" role="listbox" aria-label="Ranked search results">
-                    {battleMapResults.map((m) => {
-                      const selected = battlePick?.id === m.id;
-                      const pickMap = () => {
-                        setBattlePick(m);
-                        setBattleMapResults([]);
-                        setBattleMapQuery("");
-                      };
-                      return (
-                        <li
-                          key={m.id}
-                          role="option"
-                          aria-selected={selected}
-                          tabIndex={0}
-                          className={`battle-map-pick-option ${selected ? "is-selected" : ""}`}
-                          onClick={pickMap}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              pickMap();
-                            }
-                          }}
-                        >
-                          <span className="battle-map-pick-title">
-                            {m.artist} — {m.title}
-                          </span>
-                          <span className="battle-map-pick-id">#{m.id}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
-              {battlePick && (
-                <div className="battle-selected-strip">
-                  <span className="battle-selected-label">Selected map</span>
-                  <p className="battle-selected-body">
-                    <strong>{battlePick.title}</strong>
-                    <span className="battle-selected-dash"> — </span>
-                    {battlePick.artist}
-                    <span className="hint battle-selected-set"> · set {battlePick.id}</span>
-                  </p>
-                </div>
-              )}
-            </div>
-            <div className="row-actions social-battle-primary-row">
-              <button type="button" className="primary" disabled={busy} onClick={() => void createBattle()}>
-                Start battle
-              </button>
-            </div>
-            <p className="hint social-battle-footnote">
-              Each battle closes 48 hours after creation unless both players have submitted.
-            </p>
-          </div>
-          <h3 className="social-h3 social-battle-list-heading">Your battles</h3>
-          <ul className="social-list social-battle-list">
-            {battles.map((b) => {
-              const r = asRecord(b);
-              const id = Number(r.id);
-              const creator = Number(r.creator_osu_id);
-              const opponent = Number(r.opponent_osu_id);
-              const setId = Number(r.beatmapset_id);
-              const end = Number(r.window_end);
-              const state = String(r.state);
-              const windowOpen = Number.isFinite(end) && Date.now() <= end;
-              const canTrySubmit = state !== "closed" && windowOpen;
-              return (
-                <li key={id} className="battle-row">
-                  <div className="battle-row-main">
-                    <span className="battle-row-title">
-                      {displayNameForOsu(creator)} <span className="hint">vs</span> {displayNameForOsu(opponent)}
-                    </span>
-                    <span className="hint">
-                      set #{setId} · {state}
-                      {Number.isFinite(end) ? ` · ends ${new Date(end).toLocaleString()}` : ""}
-                      {r.winner_osu_id != null ? ` · winner ${displayNameForOsu(Number(r.winner_osu_id))}` : ""}
-                    </span>
-                  </div>
-                  {canTrySubmit && (
-                    <span className="battle-row-actions">
-                      <button
-                        type="button"
-                        className="primary small-btn"
-                        disabled={busy}
-                        onClick={() => void submitBattleFromOsu(id, setId)}
-                      >
-                        Submit from osu!
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary small-btn"
-                        disabled={busy}
-                        onClick={() => void submitBattleManual(id)}
-                      >
-                        Enter score…
-                      </button>
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
+        <BattlesPanel
+          onToast={onToast}
+          socialGet={socialGet}
+          socialPost={socialPost}
+          meId={meId}
+          oauthOsuId={oauthOsuId}
+          displayNameForOsu={displayNameForOsu}
+          friendSelectOptions={friendSelectOptions}
+          resolvedSocialApiBaseUrl={resolvedSocialApiBaseUrl}
+          lockUi={busy}
+          refreshSignal={battleRefreshSignal}
+        />
       )}
 
       {sub === "challenges" && (
-        <div className="social-section social-challenge-section">
-          <p className="hint social-challenge-intro">
-            Open challenges on a beatmap set; participants join and submit scores before the deadline.
-          </p>
-          <div className="social-card social-challenge-form">
+        <div className="social-section social-challenge-section social-challenge-view">
+          <div className="social-subview-head">
+            <p className="panel-sub panel-sub--tight social-challenge-lede">
+              Relative PP ranking vs your own PP/★ curve. Optional fixed difficulty. Manual scores are raw and sort below
+              weighted submits. Refreshes every ~15s while open.
+            </p>
+          </div>
+          <div className="social-compose-shell">
             <div className="battle-map-panel">
               <div className="battle-map-panel-header">
                 <span className="battle-map-panel-title">Map</span>
@@ -1036,7 +925,7 @@ export function SocialPanel({
               <label className="field battle-map-search-field">
                 <span>Search</span>
                 <input
-                  type="text"
+                  type="search"
                   value={challengeMapQuery}
                   onChange={(e) => setChallengeMapQuery(e.target.value)}
                   placeholder="Type at least 2 characters…"
@@ -1076,6 +965,17 @@ export function SocialPanel({
                   </p>
                 </div>
               )}
+              {challengePick && (
+                <label className="field">
+                  <span>Difficulty</span>
+                  <NeuSelect
+                    value={challengeDiffValue}
+                    disabled={busy}
+                    options={challengeDiffOptions}
+                    onChange={(v) => setChallengeDiffValue(v)}
+                  />
+                </label>
+              )}
             </div>
             <div className="grid-2">
               <label className="field">
@@ -1101,14 +1001,17 @@ export function SocialPanel({
                 </label>
               )}
             </div>
-            <div className="row-actions social-challenge-actions">
+            <div className="row-actions row-actions--spaced social-challenge-actions">
               <button type="button" className="primary" disabled={busy} onClick={() => void createChallenge()}>
                 Create challenge
               </button>
             </div>
           </div>
-          <h3 className="social-h3 social-challenge-list-heading">Open challenges</h3>
-          <ul className="social-list social-challenge-list">
+          <section className="social-list-section social-challenge-list-section" aria-labelledby="challenges-open-heading">
+            <h3 id="challenges-open-heading" className="social-list-section__title">
+              Open challenges
+            </h3>
+            <ul className="social-list social-challenge-list">
             {challenges.map((c) => {
               const r = asRecord(c);
               const id = Number(r.id);
@@ -1117,6 +1020,8 @@ export function SocialPanel({
               const deadlineLabel = Number.isFinite(dl) ? new Date(dl).toLocaleString() : String(r.deadline ?? "—");
               const disp = parseChallengeRulesDisplay(r);
               const mapLine = disp ? `${disp.artist} — ${disp.title}` : `Set #${String(r.beatmapset_id ?? "—")}`;
+              const chBm = Number(r.beatmap_id);
+              const fixedDiff = Number.isFinite(chBm) ? chBm : null;
               const iAmIn = Boolean(r.i_am_in);
               const participantCount = Number(r.participant_count);
               const pcLabel = Number.isFinite(participantCount) ? participantCount : 0;
@@ -1131,6 +1036,7 @@ export function SocialPanel({
                     <span className="social-challenge-title">{mapLine}</span>
                     <span className="hint social-challenge-meta">
                       Challenge #{id} · {pcLabel} participant{pcLabel === 1 ? "" : "s"} · ends {deadlineLabel}
+                      {fixedDiff != null ? ` · fixed beatmap ${fixedDiff}` : ""}
                     </span>
                     {standingsTop.length > 0 && (
                       <ul className="social-challenge-standings" aria-label="Top scores">
@@ -1138,9 +1044,24 @@ export function SocialPanel({
                           const sr = asRecord(row);
                           const uid = Number(sr.user_osu_id);
                           const sc = Number(sr.score);
+                          const rv = sr.rank_value != null ? Number(sr.rank_value) : null;
+                          const ppV = sr.pp != null ? Number(sr.pp) : null;
+                          const starsV = sr.stars != null ? Number(sr.stars) : null;
+                          const unweighted = Boolean(sr.is_unweighted);
+                          let line: string;
+                          if (unweighted) {
+                            line = `${displayNameForOsu(uid)} — ${Number.isFinite(sc) ? sc.toLocaleString() : "—"} (raw)`;
+                          } else if (rv != null && Number.isFinite(rv)) {
+                            const starBit =
+                              starsV != null && Number.isFinite(starsV) ? `★${starsV.toFixed(1)} · ` : "";
+                            const ppBit = ppV != null && Number.isFinite(ppV) ? `${ppV.toFixed(0)}pp · ` : "";
+                            line = `${displayNameForOsu(uid)} — ${starBit}${ppBit}${rv.toFixed(2)}×`;
+                          } else {
+                            line = `${displayNameForOsu(uid)} — ${Number.isFinite(sc) ? sc.toLocaleString() : "—"}`;
+                          }
                           return (
                             <li key={uid}>
-                              {displayNameForOsu(uid)} — {Number.isFinite(sc) ? sc.toLocaleString() : "—"}
+                              {line}
                             </li>
                           );
                         })}
@@ -1167,7 +1088,7 @@ export function SocialPanel({
                         type="button"
                         className="primary small-btn"
                         disabled={busy}
-                        onClick={() => void submitChallengeFromOsu(id, setId)}
+                        onClick={() => void submitChallengeFromOsu(id, setId, fixedDiff)}
                       >
                         Submit from osu!
                       </button>
@@ -1190,6 +1111,7 @@ export function SocialPanel({
               <li className="hint social-list-empty">No challenges yet.</li>
             )}
           </ul>
+          </section>
         </div>
       )}
 
@@ -1201,6 +1123,7 @@ export function SocialPanel({
           onToast={onToast}
         />
       )}
+      </div>
     </div>
   );
 }

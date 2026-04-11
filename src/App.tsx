@@ -1,14 +1,12 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type UIEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   buildSharedPayload,
   parseImportedCollectionJson,
   serializeSharedCollection,
 } from "./collectionShare";
 import {
-  DEFAULT_OVERLAY_FOCUS_HOTKEY,
-  DEFAULT_OVERLAY_HOTKEY,
   DEFAULT_PARTY_WS_URL,
   PARTY_SERVER_URL_UI_HIDDEN,
   PUBLIC_PARTY_WS_URL,
@@ -17,22 +15,33 @@ import {
 import {
   getActiveCollection,
   mapActiveItems,
+  uniqueCollectionName,
   type BeatmapCollection,
   type CollectionItem,
   type CollectionStore,
 } from "./models";
+import { JapaneseTextBackdrop } from "./JapaneseTextBackdrop";
+import { CollectionsPanel } from "./CollectionsPanel";
 import { OnboardingFlow } from "./OnboardingFlow";
 import { buildPartyConnectUrlCandidates } from "./party/partyConnectUrls";
 import { PartyClient, type PartyClientState } from "./party/partyClient";
 import { parseLobbyCodeFromText } from "./party/parseLobbyCode";
 import { PartyPanel } from "./PartyPanel";
+import { BeatmapsetDetailModal, type BeatmapsetDetailTarget } from "./BeatmapsetDetailModal";
 import { SearchDownloadPanel } from "./SearchDownloadPanel";
+import { PersonalStatsPanel } from "./PersonalStatsPanel";
+import { resolveSocialApiBaseUrl } from "./socialApiUrl";
 import { SocialPanel } from "./SocialPanel";
 import { TitleBar } from "./TitleBar";
-import { useOsuOverlay } from "./useOsuOverlay";
 import { useSearchDownloadState } from "./useSearchDownloadState";
 import packageJson from "../package.json";
-import { checkForUpdatesAndInstall, updaterAvailable } from "./autoUpdate";
+import type { Update } from "@tauri-apps/plugin-updater";
+import { applyUpdateAndRelaunch, check, checkForUpdatesAndInstall, updaterAvailable } from "./autoUpdate";
+import {
+  loadDesktopNotificationsEnabled,
+  notifyDesktop,
+  saveDesktopNotificationsEnabled,
+} from "./desktopNotify";
 import "./App.css";
 
 interface Settings {
@@ -42,12 +51,6 @@ interface Settings {
   onboardingCompleted: boolean;
   partyServerUrl: string | null;
   socialApiBaseUrl: string | null;
-  /** Normalized shortcut string (never empty in UI). */
-  overlayHotkey: string;
-  /** Focus overlay for typing (never empty in UI). */
-  overlayFocusHotkey: string;
-  /** In-game overlay window and global shortcuts. */
-  overlayEnabled: boolean;
 }
 
 function randomId(): string {
@@ -74,14 +77,6 @@ function downloadTextFile(filename: string, text: string): void {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-}
-
-function uniqueImportedCollectionName(desired: string, existing: string[]): string {
-  const base = desired.trim() || "Imported collection";
-  if (!existing.includes(base)) return base;
-  let n = 2;
-  while (existing.includes(`${base} (${n})`)) n += 1;
-  return `${base} (${n})`;
 }
 
 type Toast = { tone: "info" | "success" | "error"; message: string };
@@ -150,6 +145,14 @@ function IconSocial() {
   );
 }
 
+function IconStats() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M4 19V5M10 19v-6M16 19V9M22 19V12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 const initialPartyState = (url: string): PartyClientState => ({
   connection: "disconnected",
   lastError: null,
@@ -158,12 +161,109 @@ const initialPartyState = (url: string): PartyClientState => ({
   lobbyCode: null,
   leaderId: null,
   members: [],
+  queuedMaps: [],
+  chat: [],
   lastSeq: 0,
 });
 
+/** Primary destinations — copy aligned with NN/g recognition & real-world task names. */
+type AppTab = "search" | "collection" | "party" | "social" | "stats" | "settings";
+
+const VIEW_COPY: Record<AppTab, { title: string; subtitle: string }> = {
+  search: {
+    title: "Search",
+    subtitle: "Browse the osu! catalogue, tune filters, and import full beatmap sets.",
+  },
+  collection: {
+    title: "Collections",
+    subtitle: "Queues, batch import, exports, and shared JSON lists.",
+  },
+  party: {
+    title: "Party",
+    subtitle: "Connect to the party server for synced lobbies, queue, and chat.",
+  },
+  social: {
+    title: "Social",
+    subtitle: "Friends, activity, battles, challenges, and leaderboards.",
+  },
+  stats: {
+    title: "Stats",
+    subtitle: "Performance trends and charts from your recent scores.",
+  },
+  settings: {
+    title: "Settings",
+    subtitle: "Sign-in, Songs folder, party URLs, and updates.",
+  },
+};
+
+function partyChipMeta(state: PartyClientState): { label: string; tone: "neutral" | "ok" | "warn" } {
+  switch (state.connection) {
+    case "disconnected":
+      return { label: "Party offline", tone: "neutral" };
+    case "connecting":
+      return { label: "Party connecting…", tone: "warn" };
+    case "error":
+      return { label: "Party error", tone: "warn" };
+    case "connected":
+      return state.lobbyCode
+        ? { label: `Lobby ${state.lobbyCode}`, tone: "ok" }
+        : { label: "Party online", tone: "ok" };
+  }
+}
+
+function viewSubtitle(tab: AppTab, partyState: PartyClientState): string {
+  const base = VIEW_COPY[tab].subtitle;
+  if (tab !== "party") return base;
+  if (partyState.connection === "connecting") return "Connecting to the party server…";
+  if (partyState.connection === "error") {
+    const hint = partyState.lastError?.trim();
+    return hint ? `Connection issue: ${hint}` : "Could not reach the party server. Check the WebSocket URL in Settings.";
+  }
+  if (partyState.connection === "connected") {
+    return partyState.lobbyCode
+      ? `You are in lobby ${partyState.lobbyCode}. Queue and chat are below.`
+      : "Connected — create a lobby or join with a code.";
+  }
+  return base;
+}
+
+function ViewContextHeader({
+  tab,
+  authLabel,
+  partyState,
+}: {
+  tab: AppTab;
+  authLabel: string;
+  partyState: PartyClientState;
+}) {
+  const copy = VIEW_COPY[tab];
+  const chip = partyChipMeta(partyState);
+  return (
+    <header className="view-context-header" aria-labelledby="view-context-title">
+      <div className="view-context-headline">
+        <h1 id="view-context-title" className="view-context-title">
+          {copy.title}
+        </h1>
+        <p className="view-context-subtitle">{viewSubtitle(tab, partyState)}</p>
+      </div>
+      <div className="view-context-chips" role="status" aria-live="polite">
+        <span className="view-chip view-chip--neutral" title={authLabel}>
+          {authLabel}
+        </span>
+        <span className={`view-chip view-chip--${chip.tone}`}>{chip.label}</span>
+      </div>
+    </header>
+  );
+}
+
 export default function App() {
+  const startupUpdateRef = useRef<Update | null>(null);
+  const [startupUpdateVersion, setStartupUpdateVersion] = useState<string | null>(null);
+  const [startupUpdateBusy, setStartupUpdateBusy] = useState(false);
   const [bootReady, setBootReady] = useState(false);
-  const [tab, setTab] = useState<"search" | "collection" | "party" | "social" | "settings">("search");
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const [tab, setTab] = useState<AppTab>("search");
   const [settings, setSettings] = useState<Settings>({
     clientId: "",
     clientSecret: "",
@@ -171,12 +271,11 @@ export default function App() {
     onboardingCompleted: false,
     partyServerUrl: null,
     socialApiBaseUrl: null,
-    overlayHotkey: DEFAULT_OVERLAY_HOTKEY,
-    overlayFocusHotkey: DEFAULT_OVERLAY_FOCUS_HOTKEY,
-    overlayEnabled: true,
   });
   const [resolvedSongs, setResolvedSongs] = useState<string>("");
   const [authLabel, setAuthLabel] = useState<string>("Signed out");
+  const [meOsuId, setMeOsuId] = useState<number | null>(null);
+  const [beatmapsetDetail, setBeatmapsetDetail] = useState<BeatmapsetDetailTarget | null>(null);
   const [noVideo, setNoVideo] = useState(true);
   const [collectionStore, setCollectionStore] = useState<CollectionStore>({
     activeCollectionId: null,
@@ -184,11 +283,11 @@ export default function App() {
   });
   const storeRef = useRef<CollectionStore>(collectionStore);
   const [importBusy, setImportBusy] = useState(false);
-  const [collectionNameDraft, setCollectionNameDraft] = useState("");
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("—");
   const [updateBusy, setUpdateBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useState(loadDesktopNotificationsEnabled);
   const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
   const localLibraryRef = useRef<Set<number>>(new Set());
   const importFileRef = useRef<HTMLInputElement>(null);
@@ -252,6 +351,30 @@ export default function App() {
     }
   }, [pushToast]);
 
+  const dismissStartupUpdate = useCallback(async () => {
+    const u = startupUpdateRef.current;
+    startupUpdateRef.current = null;
+    setStartupUpdateVersion(null);
+    if (u) await u.close();
+  }, []);
+
+  const installStartupUpdate = useCallback(async () => {
+    const u = startupUpdateRef.current;
+    if (!u) return;
+    setStartupUpdateBusy(true);
+    try {
+      startupUpdateRef.current = null;
+      setStartupUpdateVersion(null);
+      await applyUpdateAndRelaunch(u);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      pushToast("error", message);
+      await u.close();
+    } finally {
+      setStartupUpdateBusy(false);
+    }
+  }, [pushToast]);
+
   useEffect(() => {
     pushToastRef.current = pushToast;
   }, [pushToast]);
@@ -270,12 +393,22 @@ export default function App() {
     const client = new PartyClient(defaultPartyWsUrlFromSettings(undefined), (ev) => {
       if (ev.kind === "state") setPartyState(ev.state);
       if (ev.kind === "beatmap_queued") {
+        const stN = partyClientRef.current?.getState();
+        const msg = ev.msg;
+        if (
+          stN?.selfId &&
+          msg.fromMemberId &&
+          msg.fromMemberId !== stN.selfId
+        ) {
+          const label =
+            msg.title && msg.artist ? `${msg.artist} – ${msg.title}` : `set #${msg.setId}`;
+          void notifyDesktop("osu-link — Party", `${label} added to queue`);
+        }
         partyImportChain.current = partyImportChain.current.then(async () => {
           const st = partyClientRef.current?.getState();
           if (!st?.selfId) return;
           const idx = Math.max(0, st.members.findIndex((m) => m.id === st.selfId));
           await new Promise((r) => setTimeout(r, idx * 300));
-          const msg = ev.msg;
           const label =
             msg.title && msg.artist ? `${msg.artist} – ${msg.title}` : `set #${msg.setId}`;
           try {
@@ -311,24 +444,24 @@ export default function App() {
   const activeCollection = getActiveCollection(collectionStore);
   const activeItems = activeCollection?.items ?? [];
 
-  useEffect(() => {
-    setCollectionNameDraft(activeCollection?.name ?? "");
-  }, [activeCollection?.id, activeCollection?.name]);
-
   const refreshAuth = useCallback(async () => {
     try {
-      const st = await invoke<{ loggedIn: boolean; username?: string | null }>("auth_status");
+      const st = await invoke<{ loggedIn: boolean; username?: string | null; osuId?: number | null }>("auth_status");
       if (st.loggedIn) {
         setAuthLabel(st.username ? `Signed in as ${st.username}` : "Signed in");
+        const oid = st.osuId;
+        setMeOsuId(oid != null && Number.isFinite(Number(oid)) ? Number(oid) : null);
         const u = st.username?.trim();
         if (u) {
           setPartyDisplayName((prev) => (prev.trim() === "" ? u : prev));
         }
       } else {
         setAuthLabel("Signed out");
+        setMeOsuId(null);
       }
     } catch {
       setAuthLabel("Signed out");
+      setMeOsuId(null);
     }
   }, []);
 
@@ -352,9 +485,6 @@ export default function App() {
         onboardingCompleted: s.onboardingCompleted !== false,
         partyServerUrl: s.partyServerUrl ?? null,
         socialApiBaseUrl: s.socialApiBaseUrl ?? null,
-        overlayHotkey: (s as Settings).overlayHotkey?.trim() || DEFAULT_OVERLAY_HOTKEY,
-        overlayFocusHotkey: (s as Settings).overlayFocusHotkey?.trim() || DEFAULT_OVERLAY_FOCUS_HOTKEY,
-        overlayEnabled: (s as Settings).overlayEnabled !== false,
       });
     } catch {
       setSettings((prev) => ({ ...prev, onboardingCompleted: true }));
@@ -374,9 +504,6 @@ export default function App() {
           onboardingCompleted: s.onboardingCompleted !== false,
           partyServerUrl: s.partyServerUrl ?? null,
           socialApiBaseUrl: s.socialApiBaseUrl ?? null,
-          overlayHotkey: (s as Settings).overlayHotkey?.trim() || DEFAULT_OVERLAY_HOTKEY,
-          overlayFocusHotkey: (s as Settings).overlayFocusHotkey?.trim() || DEFAULT_OVERLAY_FOCUS_HOTKEY,
-          overlayEnabled: (s as Settings).overlayEnabled !== false,
         });
         const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
         partyClientRef.current?.setUrl(urls[0]);
@@ -396,6 +523,32 @@ export default function App() {
       setBootReady(true);
     })();
   }, [refreshAuth, refreshPaths]);
+
+  useEffect(() => {
+    if (!bootReady || !settings.onboardingCompleted || !updaterAvailable()) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const update = await check();
+        if (cancelled) {
+          await update?.close();
+          return;
+        }
+        if (!update) return;
+        startupUpdateRef.current = update;
+        setStartupUpdateVersion(update.version);
+      } catch (err) {
+        console.warn("Startup update check failed:", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      const u = startupUpdateRef.current;
+      startupUpdateRef.current = null;
+      setStartupUpdateVersion(null);
+      void u?.close();
+    };
+  }, [bootReady, settings.onboardingCompleted]);
 
   useEffect(() => {
     if (!bootReady || !PARTY_SERVER_URL_UI_HIDDEN) return;
@@ -430,11 +583,6 @@ export default function App() {
             settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
               ? settings.socialApiBaseUrl.trim()
               : null,
-          overlayHotkey:
-            settings.overlayHotkey.trim() !== "" ? settings.overlayHotkey.trim() : null,
-          overlayFocusHotkey:
-            settings.overlayFocusHotkey.trim() !== "" ? settings.overlayFocusHotkey.trim() : null,
-          overlayEnabled: settings.overlayEnabled,
         },
       });
       setSettings((prev) => ({ ...prev, onboardingCompleted: false }));
@@ -481,16 +629,35 @@ export default function App() {
     });
   };
 
-  const commitCollectionRename = () => {
+  const commitCollectionRename = (name: string) => {
     const store = storeRef.current;
     const aid = store.activeCollectionId;
     if (!aid) return;
-    const name = collectionNameDraft.trim() || "Untitled";
+    const trimmed = name.trim() || "Untitled";
     const next: CollectionStore = {
       ...store,
-      collections: store.collections.map((c) => (c.id === aid ? { ...c, name } : c)),
+      collections: store.collections.map((c) => (c.id === aid ? { ...c, name: trimmed } : c)),
     };
     void persistStore(next);
+  };
+
+  const duplicateActiveCollection = () => {
+    const store = storeRef.current;
+    const active = getActiveCollection(store);
+    if (!active) return;
+    const names = store.collections.map((c) => c.name);
+    const name = uniqueCollectionName(`${active.name} (copy)`, names);
+    const col: BeatmapCollection = {
+      id: `col-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      items: active.items.map((i) => ({ ...i, id: randomId() })),
+    };
+    void persistStore({
+      ...store,
+      collections: [...store.collections, col],
+      activeCollectionId: col.id,
+    });
+    pushToast("success", `Duplicated as “${name}”.`);
   };
 
   const partyCanSend = Boolean(
@@ -545,7 +712,32 @@ export default function App() {
     setNoVideo,
   });
 
-  useOsuOverlay(bootReady, settings.overlayEnabled, settings.overlayHotkey, settings.overlayFocusHotkey);
+  const onMainScroll = useCallback((e: UIEvent<HTMLElement>) => {
+    setShowScrollTop(e.currentTarget.scrollTop > 360);
+  }, []);
+
+  useEffect(() => {
+    const el = mainScrollRef.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    setShowScrollTop(false);
+  }, [tab]);
+
+  useEffect(() => {
+    if (!bootReady || !settings.onboardingCompleted) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const k = e.key;
+      if (k < "1" || k > "6") return;
+      const t = e.target;
+      if (t instanceof Element && t.closest("input, textarea, select, [contenteditable='true']")) return;
+      e.preventDefault();
+      const order: Array<typeof tab> = ["search", "collection", "party", "social", "stats", "settings"];
+      setTab(order[parseInt(k, 10) - 1]);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bootReady, settings.onboardingCompleted]);
 
   const saveSettings = async () => {
     setSettingsMsg(null);
@@ -569,11 +761,6 @@ export default function App() {
           onboardingCompleted: settings.onboardingCompleted,
           partyServerUrl: partyUrl,
           socialApiBaseUrl: socialUrl,
-          overlayHotkey:
-            settings.overlayHotkey.trim() !== "" ? settings.overlayHotkey.trim() : null,
-          overlayFocusHotkey:
-            settings.overlayFocusHotkey.trim() !== "" ? settings.overlayFocusHotkey.trim() : null,
-          overlayEnabled: settings.overlayEnabled,
         },
       });
       const wsUrl = defaultPartyWsUrlFromSettings(partyUrl);
@@ -581,14 +768,6 @@ export default function App() {
       setPartyState((prev) => ({ ...prev, url: wsUrl }));
       setSettingsMsg("Settings saved.");
       pushToast("success", "Settings saved.");
-      setSettings((prev) => ({
-        ...prev,
-        overlayHotkey: prev.overlayHotkey.trim() || DEFAULT_OVERLAY_HOTKEY,
-        overlayFocusHotkey: prev.overlayFocusHotkey.trim() || DEFAULT_OVERLAY_FOCUS_HOTKEY,
-      }));
-      if (isTauri()) {
-        await invoke("reload_overlay_hotkeys").catch(() => {});
-      }
       await refreshPaths();
     } catch (e) {
       setSettingsMsg(String(e));
@@ -641,14 +820,15 @@ export default function App() {
     }
   };
 
-  const importAll = async () => {
+  const importItemsQueue = async (items: CollectionItem[]) => {
+    if (items.length === 0) return;
     setImportBusy(true);
     setSettingsMsg(null);
     try {
-      const snapshot = [...(getActiveCollection(storeRef.current)?.items ?? [])];
-      for (const item of snapshot) {
-        if (item.status === "imported") continue;
-        await importOne(item);
+      for (const item of items) {
+        const fresh = getActiveCollection(storeRef.current)?.items.find((i) => i.id === item.id);
+        if (!fresh || fresh.status === "imported") continue;
+        await importOne(fresh);
         await new Promise((r) => setTimeout(r, 400));
       }
     } finally {
@@ -659,6 +839,14 @@ export default function App() {
   const removeFromCollection = async (itemId: string) => {
     await persistStore(
       mapActiveItems(storeRef.current, (items) => items.filter((c) => c.id !== itemId)),
+    );
+  };
+
+  const removeItemsFromCollection = async (itemIds: string[]) => {
+    if (itemIds.length === 0) return;
+    const idSet = new Set(itemIds);
+    await persistStore(
+      mapActiveItems(storeRef.current, (items) => items.filter((c) => !idSet.has(c.id))),
     );
   };
 
@@ -716,7 +904,7 @@ export default function App() {
       return;
     }
     const names = storeRef.current.collections.map((c) => c.name);
-    const colName = uniqueImportedCollectionName(parsed.data.name, names);
+    const colName = uniqueCollectionName(parsed.data.name || "Imported collection", names);
     const col: BeatmapCollection = {
       id: `col-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       name: colName,
@@ -790,11 +978,15 @@ export default function App() {
     );
     return isTauri() ? (
       <div className="app-desktop">
+        <JapaneseTextBackdrop />
         <TitleBar />
         {boot}
       </div>
     ) : (
-      boot
+      <div className="app-desktop">
+        <JapaneseTextBackdrop />
+        {boot}
+      </div>
     );
   }
 
@@ -810,16 +1002,21 @@ export default function App() {
     );
     return isTauri() ? (
       <div className="app-desktop">
+        <JapaneseTextBackdrop />
         <TitleBar />
         {onboarding}
       </div>
     ) : (
-      onboarding
+      <div className="app-desktop">
+        <JapaneseTextBackdrop />
+        {onboarding}
+      </div>
     );
   }
 
   const main = (
     <div className="app-shell">
+      <JapaneseTextBackdrop />
       <aside className="side-rail" aria-label="Main navigation">
         <div className="brand-block">
           <div className="brand-title">
@@ -829,80 +1026,88 @@ export default function App() {
           <p className="brand-tagline">Beatmaps for stable</p>
         </div>
 
-        <nav className="side-nav">
+        <nav className="side-nav" aria-label="Primary">
           <button
             type="button"
             className={`side-nav-item ${tab === "search" ? "active" : ""}`}
             onClick={() => setTab("search")}
+            aria-current={tab === "search" ? "page" : undefined}
+            title="Catalog — search and download beatmaps · Alt+1"
           >
             <span className="side-nav-icon">
               <IconSearch />
             </span>
-            <span className="side-nav-text">
-              Search
-              <span className="side-nav-desc">Browse osu! library</span>
-            </span>
+            <span className="side-nav-text">Search</span>
           </button>
           <button
             type="button"
             className={`side-nav-item ${tab === "collection" ? "active" : ""}`}
             onClick={() => setTab("collection")}
+            aria-current={tab === "collection" ? "page" : undefined}
+            title={`${activeItems.length} maps in "${activeCollection?.name ?? "—"}" · ${totalMapsInLibrary} total across collections · Alt+2`}
           >
             <span className="side-nav-icon">
               <IconCollections />
             </span>
-            <span className="side-nav-text">
-              Collections
-              <span className="side-nav-desc">
-                {activeItems.length} in &quot;{activeCollection?.name ?? "—"}&quot; · {totalMapsInLibrary} total
-              </span>
-            </span>
+            <span className="side-nav-text">Collections</span>
           </button>
           <button
             type="button"
             className={`side-nav-item ${tab === "party" ? "active" : ""}`}
             onClick={() => setTab("party")}
+            aria-current={tab === "party" ? "page" : undefined}
+            title={
+              partyState.lobbyCode
+                ? `Lobby code ${partyState.lobbyCode} · Alt+3`
+                : "Party — lobbies, queue, and chat · Alt+3"
+            }
           >
             <span className="side-nav-icon">
               <IconParty />
             </span>
-            <span className="side-nav-text">
-              Party
-              <span className="side-nav-desc">
-                {partyState.lobbyCode ? `Lobby ${partyState.lobbyCode}` : "Multiplayer lobbies"}
-              </span>
-            </span>
+            <span className="side-nav-text">Party</span>
           </button>
           <button
             type="button"
             className={`side-nav-item ${tab === "social" ? "active" : ""}`}
             onClick={() => setTab("social")}
+            aria-current={tab === "social" ? "page" : undefined}
+            title="Friends, activity, battles, challenges, leaderboard · Alt+4"
           >
             <span className="side-nav-icon">
               <IconSocial />
             </span>
-            <span className="side-nav-text">
-              Social
-              <span className="side-nav-desc">Friends, battles, activity</span>
+            <span className="side-nav-text">Social</span>
+          </button>
+          <button
+            type="button"
+            className={`side-nav-item ${tab === "stats" ? "active" : ""}`}
+            onClick={() => setTab("stats")}
+            aria-current={tab === "stats" ? "page" : undefined}
+            title="Performance stats and charts · Alt+5"
+          >
+            <span className="side-nav-icon">
+              <IconStats />
             </span>
+            <span className="side-nav-text">Stats</span>
           </button>
           <button
             type="button"
             className={`side-nav-item ${tab === "settings" ? "active" : ""}`}
             onClick={() => setTab("settings")}
+            aria-current={tab === "settings" ? "page" : undefined}
+            title="Account, OAuth, paths, and notifications · Alt+6"
           >
             <span className="side-nav-icon">
               <IconSettings />
             </span>
-            <span className="side-nav-text">
-              Settings
-              <span className="side-nav-desc">Account &amp; folders</span>
-            </span>
+            <span className="side-nav-text">Settings</span>
           </button>
         </nav>
 
         <div className="side-footer">
           <div className="auth-compact">{authLabel}</div>
+          <p className="side-nav-shortcut-hint">Alt+1–6 switch tabs</p>
           <p className="side-credit">Made by Peyton</p>
         </div>
       </aside>
@@ -917,10 +1122,33 @@ export default function App() {
           </div>
         )}
 
-        <main className="main-scroll">
+        <BeatmapsetDetailModal
+          open={beatmapsetDetail !== null}
+          onClose={() => setBeatmapsetDetail(null)}
+          target={beatmapsetDetail}
+          mode={searchDl.mode}
+          meOsuId={meOsuId}
+        />
+
+        <main
+          ref={mainScrollRef}
+          className="main-scroll"
+          onScroll={onMainScroll}
+          aria-labelledby="view-context-title"
+          id="main-content"
+        >
+          <ViewContextHeader tab={tab} authLabel={authLabel} partyState={partyState} />
           <div key={tab} className="main-tab-pane">
         {tab === "social" && (
-          <SocialPanel onToast={(tone, message) => pushToast(tone, message)} />
+          <SocialPanel
+            onToast={(tone, message) => pushToast(tone, message)}
+            resolvedSocialApiBaseUrl={resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl)}
+            socialApiIsOverride={Boolean(settings.socialApiBaseUrl?.trim())}
+          />
+        )}
+
+        {tab === "stats" && (
+          <PersonalStatsPanel onToast={(tone, message) => pushToast(tone, message)} />
         )}
 
         {tab === "party" && (
@@ -959,374 +1187,258 @@ export default function App() {
                 pushToast("error", "Could not copy to clipboard.");
               }
             }}
+            onSendChat={(text) => {
+              const ok = partyClientRef.current?.sendChat(text);
+              if (!ok) pushToast("error", "Not connected to the party server.");
+            }}
+            onTransferLeadership={(targetMemberId) => {
+              const ok = partyClientRef.current?.transferLeadership(targetMemberId);
+              if (!ok) pushToast("error", "Not connected to the party server.");
+            }}
+            onClearQueue={() => {
+              const ok = partyClientRef.current?.clearQueue();
+              if (!ok) pushToast("error", "Not connected to the party server.");
+            }}
+            onRemoveQueueItem={(seq) => {
+              const ok = partyClientRef.current?.removeQueueItem(seq);
+              if (!ok) pushToast("error", "Not connected to the party server.");
+            }}
           />
         )}
 
         {tab === "settings" && (
-          <div className="panel panel-elevated">
-            <div className="panel-head">
-              <h2>Application</h2>
-              <p className="panel-sub">
-                Current version <strong>{appVersion}</strong>. Updates use GitHub Releases (signed builds only).
-              </p>
-            </div>
-            <div className="row-actions" style={{ marginBottom: "1rem" }}>
-              <button
-                type="button"
-                className="secondary"
-                disabled={!updaterAvailable() || updateBusy}
-                aria-busy={updateBusy}
-                onClick={() => void handleCheckForUpdates()}
-              >
-                {updateBusy ? "Checking…" : "Check for updates"}
-              </button>
-            </div>
-            {!updaterAvailable() && (
-              <p className="hint" style={{ marginBottom: "1rem" }}>
-                The updater runs in the packaged desktop app only (not in dev or the browser preview).
-              </p>
-            )}
-            {isTauri() && (
-              <>
-                <label className="field field--checkbox" style={{ marginBottom: "1rem" }}>
-                  <input
-                    type="checkbox"
-                    checked={settings.overlayEnabled}
-                    onChange={(e) => setSettings({ ...settings, overlayEnabled: e.target.checked })}
-                  />
-                  <span>Enable in-game overlay (search panel over osu!)</span>
-                </label>
-                <p className="hint" style={{ marginBottom: "0.75rem" }}>
-                  In-game overlay: when osu!stable is running, you can open the search panel with the shortcuts below. On
-                  Windows, shortcuts use a low-level keyboard hook (similar to Overwolf) so they still fire while osu!
-                  has focus; other platforms use the standard global shortcut API. Toggle does not steal osu! focus; use
-                  the second shortcut when you need to type in the overlay.
+          <div className="panel panel-elevated settings-panel">
+            <div className="main-pane-sticky">
+              <div className="panel-head">
+                <h2>Settings</h2>
+                <p className="panel-sub">
+                  Version <strong>{appVersion}</strong> · updates via GitHub Releases.
                 </p>
-                <p className="hint" style={{ marginBottom: "0.75rem" }}>
-                  <strong>Fullscreen:</strong> true exclusive fullscreen owns the screen and a normal desktop window
-                  cannot draw on top. Use osu! <strong>borderless</strong> at your display resolution (or windowed).
-                  The overlay refreshes its stacking order several times per second to stay above the game when the OS
-                  allows it.
-                </p>
-                <label className="field" style={{ marginBottom: "1rem" }}>
-                  <span>Overlay toggle shortcut</span>
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder={DEFAULT_OVERLAY_HOTKEY}
-                    value={settings.overlayHotkey}
-                    disabled={!settings.overlayEnabled}
-                    onChange={(e) => setSettings({ ...settings, overlayHotkey: e.target.value })}
-                  />
-                </label>
-                <label className="field" style={{ marginBottom: "1rem" }}>
-                  <span>Focus overlay shortcut</span>
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder={DEFAULT_OVERLAY_FOCUS_HOTKEY}
-                    value={settings.overlayFocusHotkey}
-                    disabled={!settings.overlayEnabled}
-                    onChange={(e) => setSettings({ ...settings, overlayFocusHotkey: e.target.value })}
-                  />
-                </label>
-                <p className="hint" style={{ marginBottom: "1rem" }}>
-                  Use Tauri&apos;s format: modifiers and key separated by <code>+</code> (e.g.{" "}
-                  <code>Shift+Tab</code>, <code>Ctrl+Shift+F</code>). The two shortcuts must differ. Save settings to
-                  apply. If registration fails, try another combination.
-                </p>
-              </>
-            )}
-            <div className="panel-head">
-              <h2>OAuth application</h2>
-              <p className="panel-sub">Keys for the official search API (downloads use a public mirror).</p>
-            </div>
-            <div className="row-actions" style={{ marginBottom: "0.75rem" }}>
-              <button type="button" className="secondary" onClick={() => void openSetupGuide()}>
-                Run setup guide again
-              </button>
-            </div>
-            <p className="hint">
-              Create an OAuth app on osu! (account settings → OAuth). Set redirect URI exactly to{" "}
-              <code>http://127.0.0.1:42813/callback</code> (fixed port). Close other osu-link windows before signing in.
-            </p>
-            <div className="grid-2">
-              <label className="field">
-                <span>Client ID</span>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  value={settings.clientId}
-                  onChange={(e) => setSettings({ ...settings, clientId: e.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span>Client secret</span>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={settings.clientSecret}
-                  onChange={(e) => setSettings({ ...settings, clientSecret: e.target.value })}
-                />
-              </label>
-            </div>
-            <label className="field" style={{ marginTop: "0.75rem" }}>
-              <span>Beatmap directory override (optional)</span>
-              <input
-                type="text"
-                placeholder="Leave empty to read osu!.cfg"
-                value={settings.beatmapDirectory ?? ""}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    beatmapDirectory: e.target.value === "" ? null : e.target.value,
-                  })
-                }
-              />
-            </label>
-            {!PARTY_SERVER_URL_UI_HIDDEN && (
-              <label className="field" style={{ marginTop: "0.75rem" }}>
-                <span>Party server WebSocket URL (optional)</span>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  placeholder={PUBLIC_PARTY_WS_URL ?? DEFAULT_PARTY_WS_URL}
-                  value={settings.partyServerUrl ?? ""}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      partyServerUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
-                    })
-                  }
-                />
-              </label>
-            )}
-            <label className="field" style={{ marginTop: "0.75rem" }}>
-              <span>Social API base URL (optional)</span>
-              <input
-                type="text"
-                autoComplete="off"
-                placeholder="Derived from party URL if empty (e.g. https://127.0.0.1:4681)"
-                value={settings.socialApiBaseUrl ?? ""}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    socialApiBaseUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
-                  })
-                }
-              />
-            </label>
-            <p className="hint">Resolved folder: {resolvedSongs || "—"}</p>
-            <p className="hint">
-              Local library:{" "}
-              <strong>{localBeatmapsetIds.size}</strong> beatmap set{localBeatmapsetIds.size === 1 ? "" : "s"} detected
-              under this folder (subfolders scanned for set IDs).
-            </p>
-            <div className="row-actions">
-              <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void refreshPaths()}>
-                Rescan Songs folder
-              </button>
-            </div>
-            <p className="hint">
-              After scope changes, sign in again. Social features need the party server HTTP port (default{" "}
-              <code>4681</code>) reachable where your app runs.
-            </p>
-            <div className="row-actions">
-              <button type="button" className="primary" onClick={() => void saveSettings()}>
-                Save settings
-              </button>
-              <button type="button" className="secondary" onClick={() => void login()}>
-                Sign in with osu!
-              </button>
-              <button type="button" className="danger" onClick={() => void logout()}>
-                Sign out
-              </button>
-            </div>
-            {settingsMsg && <p className="hint">{settingsMsg}</p>}
-          </div>
-        )}
-
-        {tab === "search" && <SearchDownloadPanel s={searchDl} variant="main" />}
-
-        {tab === "collection" && (
-          <div className="panel panel-elevated">
-            <div className="panel-head">
-              <h2>Collections</h2>
-              <p className="panel-sub">
-                Queue maps for import, export a shareable list for friends, or import someone else&apos;s{' '}
-                <code>.osu-link.json</code> file.
-              </p>
-            </div>
-            <input
-              ref={importFileRef}
-              type="file"
-              accept=".json,application/json"
-              className="visually-hidden"
-              onChange={(e) => void onImportSharedFile(e)}
-            />
-            <div className="collection-toolbar">
-              <div className="collection-picker">
-                <span className="collection-picker-heading" id="collection-picker-label">
-                  Switch collection
-                </span>
-                <div
-                  className="collection-picker-list"
-                  role="listbox"
-                  aria-labelledby="collection-picker-label"
-                >
-                  {collectionStore.collections.map((c) => {
-                    const active = c.id === activeCollection?.id;
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        role="option"
-                        aria-selected={active}
-                        className={`collection-picker-card ${active ? "active" : ""}`}
-                        onClick={() => setActiveCollectionId(c.id)}
-                      >
-                        {active && <span className="collection-picker-current">Selected</span>}
-                        <span className="collection-picker-card-name">{c.name}</span>
-                        <span className="collection-picker-card-meta">
-                          {c.items.length} {c.items.length === 1 ? "map" : "maps"}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="collection-toolbar-actions">
-                <button type="button" className="secondary" onClick={createCollection}>
-                  New collection
-                </button>
-                <button
-                  type="button"
-                  className="danger"
-                  disabled={collectionStore.collections.length <= 1}
-                  onClick={deleteActiveCollection}
-                >
-                  Delete this one
-                </button>
-                <label className="field collection-rename-field">
-                  <span>Rename current</span>
-                  <input
-                    type="text"
-                    value={collectionNameDraft}
-                    onChange={(e) => setCollectionNameDraft(e.target.value)}
-                    onBlur={() => void commitCollectionRename()}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                    }}
-                    placeholder="Collection name"
-                  />
-                </label>
               </div>
             </div>
 
-            <div className="share-panel">
-              <div className="share-panel-title">Share this collection</div>
-              <p className="share-panel-desc">
-                Friends need osu-link too. Send the JSON file or paste from clipboard — imports always create a{' '}
-                <strong>new</strong> collection so nothing is overwritten.
-              </p>
-              <div className="share-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={activeItems.length === 0}
-                  onClick={exportSharedCollectionFile}
-                >
-                  Export .osu-link.json
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={activeItems.length === 0}
-                  onClick={() => void copySharedCollectionJson()}
-                >
-                  Copy JSON
-                </button>
-                <button type="button" className="secondary" onClick={() => importFileRef.current?.click()}>
-                  Import shared file…
-                </button>
-                <button type="button" className="secondary" onClick={() => void importSharedFromClipboard()}>
-                  Paste from clipboard
-                </button>
+            <details className="settings-disclosure">
+              <summary>Keyboard shortcuts</summary>
+              <div className="settings-disclosure-body">
+                <p className="hint settings-shortcuts-hint">
+                  <strong>Main window:</strong> Alt+1 Search · Alt+2 Collections · Alt+3 Party · Alt+4 Social · Alt+5
+                  Stats · Alt+6 Settings
+                </p>
               </div>
-            </div>
+            </details>
 
-            <div className="row-actions">
-              <button
-                type="button"
-                className="primary"
-                disabled={importBusy || activeItems.length === 0}
-                onClick={() => void importAll()}
-              >
-                {importBusy ? "Importing…" : "Import all (pending / error)"}
-              </button>
-              <label className="checkbox-row">
-                <input type="checkbox" checked={noVideo} onChange={(e) => setNoVideo(e.target.checked)} />
-                Without video
-              </label>
-            </div>
-            <p className="hint">
-              Imports download <code>.osz</code> via public mirrors (not the osu! API), verify audio is present, and fall back if a
-              mirror returns an incomplete archive. If you see 429, wait before retrying.
-            </p>
-            <div className="collection-list">
-              {activeItems.length === 0 && (
-                <div className="empty-state empty-state-tight">
-                  <p className="empty-title">This collection is empty</p>
-                  <p className="empty-text">
-                    Add maps from Search, or import a friend&apos;s shared file to create a new list automatically.
-                  </p>
-                  <button type="button" className="secondary" onClick={() => setTab("search")}>
-                    Go to Search
-                  </button>
-                </div>
-              )}
-              {activeItems.map((item) => (
-                <div key={item.id} className="collection-row">
-                  {item.coverUrl && <img src={item.coverUrl} alt="" width={72} height={50} style={{ objectFit: "cover", borderRadius: 4 }} />}
-                  <div className="info">
-                    <div>
-                      {item.title} — {item.artist}
-                    </div>
-                    <div className="sub">{item.creator}</div>
-                    <div className={`st ${item.status}`}>
-                      {item.status}
-                      {item.error ? `: ${item.error}` : ""}
-                    </div>
-                  </div>
-                  <button type="button" className="secondary" disabled={importBusy} onClick={() => void importOne(item)}>
-                    Import
-                  </button>
+            <details className="settings-disclosure" open>
+              <summary>Application &amp; updates</summary>
+              <div className="settings-disclosure-body">
+                <div className="row-actions row-actions--spaced">
                   <button
                     type="button"
                     className="secondary"
-                    disabled={!partyCanSend}
-                    onClick={() =>
-                      sendBeatmapToParty({
-                        beatmapsetId: item.beatmapsetId,
-                        artist: item.artist,
-                        title: item.title,
-                        creator: item.creator,
-                        coverUrl: item.coverUrl ?? null,
-                      })
-                    }
-                    title={partyCanSend ? "Leader: queue for party" : "Create or join a lobby as leader"}
+                    disabled={!updaterAvailable() || updateBusy}
+                    aria-busy={updateBusy}
+                    onClick={() => void handleCheckForUpdates()}
                   >
-                    Party
-                  </button>
-                  <button type="button" className="danger" onClick={() => void removeFromCollection(item.id)}>
-                    Remove
+                    {updateBusy ? "Checking…" : "Check for updates"}
                   </button>
                 </div>
-              ))}
-            </div>
+                {!updaterAvailable() && (
+                  <p className="hint u-mb-0">
+                    Updates only in the installed desktop app (not dev or browser).
+                  </p>
+                )}
+              </div>
+            </details>
+
+            {isTauri() && (
+              <details className="settings-disclosure" open>
+                <summary>Notifications</summary>
+                <div className="settings-disclosure-body">
+                  <label className="field field--checkbox u-mb-3">
+                    <input
+                      type="checkbox"
+                      checked={desktopNotificationsEnabled}
+                      onChange={(e) => {
+                        const v = e.target.checked;
+                        saveDesktopNotificationsEnabled(v);
+                        setDesktopNotificationsEnabled(v);
+                      }}
+                    />
+                    <span>Notify: party queue &amp; friend requests</span>
+                  </label>
+                  <p className="hint u-mb-0">
+                    The OS may ask for notification permission once.
+                  </p>
+                </div>
+              </details>
+            )}
+
+            <details className="settings-disclosure" open>
+              <summary>OAuth application</summary>
+              <div className="settings-disclosure-body">
+                <p className="panel-sub panel-sub--flush-top">
+                  osu! OAuth keys for search; downloads use a public mirror.
+                </p>
+                <div className="row-actions row-actions--spaced">
+                  <button type="button" className="secondary" onClick={() => void openSetupGuide()}>
+                    Redo OAuth setup
+                  </button>
+                </div>
+                <p className="hint">
+                  On osu! (account → OAuth), redirect URI must be{" "}
+                  <code>http://127.0.0.1:42813/callback</code>. Close other osu-link windows before sign-in.
+                </p>
+                <div className="grid-2">
+                  <label className="field">
+                    <span>Client ID</span>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      value={settings.clientId}
+                      onChange={(e) => setSettings({ ...settings, clientId: e.target.value })}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Client secret</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={settings.clientSecret}
+                      onChange={(e) => setSettings({ ...settings, clientSecret: e.target.value })}
+                    />
+                  </label>
+                </div>
+              </div>
+            </details>
+
+            <details className="settings-disclosure" open>
+              <summary>Paths &amp; server URLs</summary>
+              <div className="settings-disclosure-body">
+                <label className="field">
+                  <span>Songs folder override (optional)</span>
+                  <input
+                    type="text"
+                    placeholder="Default from osu!.cfg if empty"
+                    value={settings.beatmapDirectory ?? ""}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        beatmapDirectory: e.target.value === "" ? null : e.target.value,
+                      })
+                    }
+                  />
+                </label>
+                {!PARTY_SERVER_URL_UI_HIDDEN && (
+                  <label className="field field--stack">
+                    <span>Party server WebSocket URL (optional)</span>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      placeholder={PUBLIC_PARTY_WS_URL ?? DEFAULT_PARTY_WS_URL}
+                      value={settings.partyServerUrl ?? ""}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          partyServerUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                        })
+                      }
+                    />
+                  </label>
+                )}
+                <label className="field field--stack">
+                  <span>Social API base URL (optional)</span>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    placeholder="https://127.0.0.1:4681"
+                    value={settings.socialApiBaseUrl ?? ""}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        socialApiBaseUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                      })
+                    }
+                  />
+                </label>
+                <p className="hint">
+                  Songs folder: {resolvedSongs || "—"} · <strong>{localBeatmapsetIds.size}</strong> set
+                  {localBeatmapsetIds.size === 1 ? "" : "s"} found (subfolders scanned).
+                </p>
+                <div className="row-actions">
+                  <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void refreshPaths()}>
+                    Rescan Songs folder
+                  </button>
+                </div>
+                <p className="hint u-mb-0">
+                  Re-sign in after changing OAuth scopes. Social needs party HTTP (<code>4681</code> by default)
+                  reachable.
+                </p>
+              </div>
+            </details>
+
+            <details className="settings-disclosure" open>
+              <summary>Account</summary>
+              <div className="settings-disclosure-body">
+                <div className="settings-danger-zone">
+                  <p className="settings-danger-zone-title">Session &amp; saved keys</p>
+                  <div className="row-actions">
+                    <button type="button" className="primary" onClick={() => void saveSettings()}>
+                      Save settings
+                    </button>
+                    <button type="button" className="secondary" onClick={() => void login()}>
+                      Sign in with osu!
+                    </button>
+                    <button type="button" className="danger" onClick={() => void logout()}>
+                      Sign out
+                    </button>
+                  </div>
+                  <p className="hint settings-danger-zone-hint">
+                    Sign out clears the local session. Save settings writes OAuth fields and paths to disk.
+                  </p>
+                </div>
+                {settingsMsg && <p className="hint">{settingsMsg}</p>}
+              </div>
+            </details>
           </div>
+        )}
+
+        {tab === "search" && (
+          <SearchDownloadPanel
+            s={searchDl}
+            onInspectSet={(raw) => {
+              const id = Number((raw as Record<string, unknown>).id);
+              if (!Number.isFinite(id)) return;
+              setBeatmapsetDetail({ beatmapsetId: id, initialRaw: raw });
+            }}
+          />
+        )}
+
+        {tab === "collection" && (
+          <CollectionsPanel
+            collectionStore={collectionStore}
+            setActiveCollectionId={setActiveCollectionId}
+            createCollection={createCollection}
+            deleteActiveCollection={deleteActiveCollection}
+            duplicateActiveCollection={duplicateActiveCollection}
+            commitCollectionRename={commitCollectionRename}
+            localBeatmapsetIds={localBeatmapsetIds}
+            importFileRef={importFileRef}
+            onImportSharedFile={onImportSharedFile}
+            exportSharedCollectionFile={exportSharedCollectionFile}
+            copySharedCollectionJson={copySharedCollectionJson}
+            importSharedFromClipboard={importSharedFromClipboard}
+            importOne={importOne}
+            importItemsQueue={importItemsQueue}
+            removeFromCollection={removeFromCollection}
+            removeItemsFromCollection={removeItemsFromCollection}
+            importBusy={importBusy}
+            noVideo={noVideo}
+            setNoVideo={setNoVideo}
+            partyCanSend={partyCanSend}
+            sendBeatmapToParty={sendBeatmapToParty}
+            pushToast={pushToast}
+            onGoToSearch={() => setTab("search")}
+            onInspectBeatmapset={(id) => setBeatmapsetDetail({ beatmapsetId: id })}
+          />
         )}
           </div>
         </main>
@@ -1336,10 +1448,73 @@ export default function App() {
 
   return isTauri() ? (
     <div className="app-desktop">
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       <TitleBar />
       {main}
+      {showScrollTop && (
+        <button
+          type="button"
+          className="main-scroll-top"
+          onClick={() => mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to top"
+        >
+          ↑
+        </button>
+      )}
+      {startupUpdateVersion && (
+        <div
+          className="update-prompt-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="update-prompt-title"
+        >
+          <div className="update-prompt-card">
+            <h2 id="update-prompt-title" className="update-prompt-title">
+              Update available
+            </h2>
+            <p className="update-prompt-text">
+              osu-link {startupUpdateVersion} is ready to install. The app will restart to finish updating.
+            </p>
+            <div className="update-prompt-actions">
+              <button
+                type="button"
+                className="secondary"
+                disabled={startupUpdateBusy}
+                onClick={() => void dismissStartupUpdate()}
+              >
+                Later
+              </button>
+              <button
+                type="button"
+                className="primary"
+                disabled={startupUpdateBusy}
+                onClick={() => void installStartupUpdate()}
+              >
+                {startupUpdateBusy ? "Installing…" : "Install and restart"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   ) : (
-    main
+    <div className="app-desktop">
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+      {main}
+      {showScrollTop && (
+        <button
+          type="button"
+          className="main-scroll-top"
+          onClick={() => mainScrollRef.current?.scrollTo({ top: 0, behavior: "smooth" })}
+          aria-label="Back to top"
+        >
+          ↑
+        </button>
+      )}
+    </div>
   );
 }

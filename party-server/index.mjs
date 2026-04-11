@@ -1,6 +1,6 @@
 /**
  * osu-link party coordination server (WebSocket).
- * Protocol: see ../src/party/protocol.ts (v1).
+ * Protocol: see ../src/party/protocol.ts (v2).
  */
 
 import { randomBytes, randomInt } from "node:crypto";
@@ -27,10 +27,13 @@ const HEALTH_HOST = process.env.HEALTH_HOST || "127.0.0.1";
 const LOG_LEVEL = (process.env.LOG_LEVEL || "info").toLowerCase();
 const DEBUG_WS = process.env.DEBUG_WS === "1";
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const MAX_QUEUE = 100;
 const MAX_LOBBIES = 500;
 const MAX_MEMBERS_PER_LOBBY = 16;
+/** Max chat lines retained per lobby (welcome tail + memory) */
+const MAX_CHAT_LOG = 50;
+const MAX_CHAT_LEN = 280;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 120;
 /** REST /api/v1 per-IP budget per minute */
@@ -132,6 +135,32 @@ function checkRate(ip) {
   return b.count <= RATE_MAX;
 }
 
+/** @type {Map<string, { t0: number, count: number }>} */
+const chatRateBuckets = new Map();
+const CHAT_RATE_MAX = 60;
+
+function checkChatRate(ip) {
+  const now = Date.now();
+  let b = chatRateBuckets.get(ip);
+  if (!b || now - b.t0 > RATE_WINDOW_MS) {
+    b = { t0: now, count: 0 };
+    chatRateBuckets.set(ip, b);
+  }
+  b.count += 1;
+  return b.count <= CHAT_RATE_MAX;
+}
+
+/**
+ * @param {unknown} s
+ * @returns {string}
+ */
+function sanitizeChatText(s) {
+  if (typeof s !== "string") return "";
+  let t = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "").trim();
+  if (t.length > MAX_CHAT_LEN) t = t.slice(0, MAX_CHAT_LEN);
+  return t;
+}
+
 function lobbyStats() {
   let membersTotal = 0;
   for (const l of lobbies.values()) {
@@ -175,6 +204,8 @@ class Lobby {
     /** @type {Array<{ seq: number, setId: number, noVideo: boolean, artist?: string, title?: string, creator?: string, coverUrl?: string | null, fromMemberId: string }>} */
     this.queue = [];
     this.nextSeq = 1;
+    /** @type {Array<{ memberId: string, text: string, ts: number }>} */
+    this.chatLog = [];
   }
 
   addMember(id, displayName, ws) {
@@ -216,6 +247,32 @@ class Lobby {
 
   send(ws, obj) {
     if (ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
+
+  /**
+   * @param {string} memberId
+   * @param {string} text
+   * @returns {{ memberId: string, text: string, ts: number }}
+   */
+  pushChat(memberId, text) {
+    const ts = Date.now();
+    this.chatLog.push({ memberId, text, ts });
+    while (this.chatLog.length > MAX_CHAT_LOG) this.chatLog.shift();
+    return { memberId, text, ts };
+  }
+
+  chatTailPublic() {
+    return this.chatLog.map((c) => ({ ...c }));
+  }
+
+  broadcastQueueSync() {
+    const msg = {
+      type: "queue_sync",
+      v: PROTOCOL_VERSION,
+      queued: this.queue.map((q) => ({ ...q })),
+      seq: this.nextSeq - 1,
+    };
+    this.broadcastAll(msg);
   }
 }
 
@@ -274,6 +331,7 @@ function handleMessage(ws, raw, ip) {
       leaderId: lobby.leaderId,
       members: lobby.toPublicMembers(),
       queued: lobby.queue.map((q) => ({ ...q })),
+      chatTail: lobby.chatTailPublic(),
       seq: lobby.nextSeq - 1,
     });
   }
@@ -303,6 +361,7 @@ function handleMessage(ws, raw, ip) {
       leaderId: lobby.leaderId ?? memberId,
       members: lobby.toPublicMembers(),
       queued: lobby.queue.map((q) => ({ ...q })),
+      chatTail: lobby.chatTailPublic(),
       seq: lobby.nextSeq - 1,
     });
 
@@ -372,8 +431,75 @@ function handleMessage(ws, raw, ip) {
       title: entry.title,
       creator: entry.creator,
       coverUrl: entry.coverUrl,
+      queuedAfter: lobby.queue.map((q) => ({ ...q })),
     };
     lobby.broadcastAll(msg);
+    return;
+  }
+
+  if (type === "chat") {
+    if (!checkChatRate(ip)) return safeError(ws, "Chat rate limited");
+    const text = sanitizeChatText(data.text);
+    if (!text) return safeError(ws, "Empty message");
+    const line = lobby.pushChat(meta.memberId, text);
+    log.info(`chat code=${lobby.code} len=${text.length}`);
+    lobby.broadcastAll({
+      type: "lobby_chat",
+      v: PROTOCOL_VERSION,
+      memberId: line.memberId,
+      text: line.text,
+      ts: line.ts,
+    });
+    return;
+  }
+
+  if (type === "transfer_leadership") {
+    if (meta.memberId !== lobby.leaderId) {
+      return safeError(ws, "Only the party leader can transfer leadership");
+    }
+    const target = typeof data.targetMemberId === "string" ? data.targetMemberId : "";
+    if (!target || !lobby.members.has(target)) {
+      return safeError(ws, "Invalid member");
+    }
+    if (target === meta.memberId) {
+      return safeError(ws, "Pick another member");
+    }
+    lobby.leaderId = target;
+    log.info(`transfer_leadership code=${lobby.code} newLeader=${target.slice(0, 8)}…`);
+    const rosterMsg = {
+      type: "roster",
+      v: PROTOCOL_VERSION,
+      leaderId: lobby.leaderId,
+      members: lobby.toPublicMembers(),
+      seq: lobby.nextSeq,
+    };
+    lobby.broadcastAll(rosterMsg);
+    return;
+  }
+
+  if (type === "clear_queue") {
+    if (meta.memberId !== lobby.leaderId) {
+      return safeError(ws, "Only the party leader can clear the queue");
+    }
+    lobby.queue = [];
+    log.info(`clear_queue code=${lobby.code}`);
+    lobby.broadcastQueueSync();
+    return;
+  }
+
+  if (type === "remove_queue_item") {
+    if (meta.memberId !== lobby.leaderId) {
+      return safeError(ws, "Only the party leader can remove queue items");
+    }
+    const rmSeq = Number(data.seq);
+    if (!Number.isFinite(rmSeq)) return safeError(ws, "Invalid seq");
+    const before = lobby.queue.length;
+    lobby.queue = lobby.queue.filter((q) => q.seq !== rmSeq);
+    if (lobby.queue.length === before) {
+      return safeError(ws, "Queue item not found");
+    }
+    log.info(`remove_queue_item code=${lobby.code} seq=${rmSeq}`);
+    lobby.broadcastQueueSync();
     return;
   }
 

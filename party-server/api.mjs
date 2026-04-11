@@ -36,6 +36,29 @@ function pair(a, b) {
 }
 
 /**
+ * @param {Record<string, unknown>} r
+ */
+function mapBattleRow(r) {
+  let display = null;
+  const raw = r.display_json;
+  if (raw != null && String(raw).trim()) {
+    try {
+      const o = JSON.parse(String(raw));
+      if (o && typeof o === "object") {
+        display = {
+          title: String(o.title ?? ""),
+          artist: String(o.artist ?? ""),
+        };
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const { display_json: _dj, ...rest } = r;
+  return { ...rest, display };
+}
+
+/**
  * @param {import('better-sqlite3').Database} db
  */
 function upsertUser(db, u) {
@@ -276,16 +299,23 @@ export async function handleSocialApi(db, req, res, method, pathname) {
         )
         .all(me, t);
       const ids = rows.map((r) => r.id);
-      /** @type {Map<number, Array<{ user_osu_id: number; score: number }>>} */
+      /** @type {Map<number, Array<Record<string, unknown>>>} */
       const standingsByChallenge = new Map();
       if (ids.length > 0) {
         const ph = ids.map(() => "?").join(",");
         const scoreRows = db
           .prepare(
-            `SELECT challenge_id, user_osu_id, MAX(score) AS score
-             FROM score_submissions
-             WHERE challenge_id IN (${ph})
-             GROUP BY challenge_id, user_osu_id`,
+            `WITH ranked AS (
+               SELECT challenge_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY challenge_id, user_osu_id
+                   ORDER BY (rank_value IS NULL) ASC, rank_value DESC, score DESC
+                 ) AS rn
+               FROM score_submissions
+               WHERE challenge_id IN (${ph})
+             )
+             SELECT challenge_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted
+             FROM ranked WHERE rn = 1`,
           )
           .all(...ids);
         for (const s of scoreRows) {
@@ -295,10 +325,16 @@ export async function handleSocialApi(db, req, res, method, pathname) {
             arr = [];
             standingsByChallenge.set(cid, arr);
           }
-          arr.push({ user_osu_id: s.user_osu_id, score: s.score });
+          arr.push(s);
         }
         for (const arr of standingsByChallenge.values()) {
-          arr.sort((a, b) => b.score - a.score);
+          arr.sort((a, b) => {
+            const aW = a.rank_value != null && Number.isFinite(Number(a.rank_value));
+            const bW = b.rank_value != null && Number.isFinite(Number(b.rank_value));
+            if (aW !== bW) return aW ? -1 : 1;
+            if (aW && bW) return Number(b.rank_value) - Number(a.rank_value);
+            return Number(b.score) - Number(a.score);
+          });
           arr.splice(3);
         }
       }
@@ -316,11 +352,18 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       if (!ch) return json(res, 404, { error: "not_found" });
       const scoreRows = db
         .prepare(
-          `SELECT user_osu_id, MAX(score) AS score
-           FROM score_submissions
-           WHERE challenge_id = ?
-           GROUP BY user_osu_id
-           ORDER BY score DESC
+          `WITH ranked AS (
+             SELECT user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted,
+               ROW_NUMBER() OVER (
+                 PARTITION BY user_osu_id
+                 ORDER BY (rank_value IS NULL) ASC, rank_value DESC, score DESC
+               ) AS rn
+             FROM score_submissions
+             WHERE challenge_id = ?
+           )
+           SELECT user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted
+           FROM ranked WHERE rn = 1
+           ORDER BY (rank_value IS NULL) ASC, rank_value DESC, score DESC
            LIMIT 20`,
         )
         .all(id);
@@ -351,6 +394,12 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       const score = Number(body?.score);
       const mods = Number(body?.mods ?? 0);
       if (!Number.isFinite(score)) return json(res, 400, { error: "bad_request" });
+      const rankValue = body?.rankValue != null ? Number(body.rankValue) : null;
+      const pp = body?.pp != null ? Number(body.pp) : null;
+      const stars = body?.stars != null ? Number(body.stars) : null;
+      const playBeatmapId = body?.playBeatmapId != null ? Number(body.playBeatmapId) : null;
+      const baselinePpPerStar = body?.baselinePpPerStar != null ? Number(body.baselinePpPerStar) : null;
+      const isUnweighted = Boolean(body?.isUnweighted);
       const ch = db.prepare(`SELECT * FROM challenges WHERE id = ?`).get(id);
       if (!ch) return json(res, 404, { error: "not_found" });
       if (ch.status !== "open" || ch.deadline <= Date.now()) {
@@ -358,10 +407,31 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       }
       const part = db.prepare(`SELECT 1 FROM challenge_participants WHERE challenge_id = ? AND user_osu_id = ?`).get(id, me);
       if (!part) return json(res, 403, { error: "not_participant" });
+      const rv =
+        !isUnweighted && rankValue != null && Number.isFinite(rankValue) ? rankValue : null;
+      const ppIns = pp != null && Number.isFinite(pp) ? pp : null;
+      const starsIns = stars != null && Number.isFinite(stars) ? stars : null;
+      const bmid = playBeatmapId != null && Number.isFinite(playBeatmapId) ? Math.round(playBeatmapId) : null;
+      const baselineIns =
+        baselinePpPerStar != null && Number.isFinite(baselinePpPerStar) ? baselinePpPerStar : null;
       db.prepare(
-        `INSERT INTO score_submissions (battle_id, challenge_id, user_osu_id, score, mods, submitted_at)
-         VALUES (NULL, ?, ?, ?, ?, ?)`,
-      ).run(id, me, Math.round(score), Math.round(mods), Date.now());
+        `INSERT INTO score_submissions (
+           battle_id, challenge_id, user_osu_id, score, mods, submitted_at,
+           pp, stars, play_beatmap_id, rank_value, baseline_pp_per_star, is_unweighted
+         ) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        me,
+        Math.round(score),
+        Math.round(mods),
+        Date.now(),
+        ppIns,
+        starsIns,
+        bmid,
+        rv,
+        baselineIns,
+        isUnweighted ? 1 : 0,
+      );
       insertActivity(db, me, "challenge_score", { challengeId: id, score: Math.round(score) });
       return json(res, 201, { ok: true });
     }
@@ -383,10 +453,17 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       if (!Number.isFinite(windowEnd) || windowEnd <= now) {
         windowEnd = now + DEFAULT_BATTLE_MS;
       }
+      let displayJson = null;
+      if (body?.display && typeof body.display === "object") {
+        displayJson = JSON.stringify({
+          title: String(body.display.title ?? ""),
+          artist: String(body.display.artist ?? ""),
+        });
+      }
       const info = db
         .prepare(
-          `INSERT INTO async_battles (creator_osu_id, opponent_osu_id, beatmapset_id, beatmap_id, window_start, window_end, state, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'open', ?)`,
+          `INSERT INTO async_battles (creator_osu_id, opponent_osu_id, beatmapset_id, beatmap_id, window_start, window_end, state, created_at, display_json)
+           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
         )
         .run(
           me,
@@ -396,6 +473,7 @@ export async function handleSocialApi(db, req, res, method, pathname) {
           now,
           windowEnd,
           now,
+          displayJson,
         );
       const battleId = info.lastInsertRowid;
       insertActivity(db, me, "battle_created", { battleId, opponentOsuId: opponent, beatmapsetId });
@@ -409,7 +487,25 @@ export async function handleSocialApi(db, req, res, method, pathname) {
            ORDER BY created_at DESC LIMIT 50`,
         )
         .all(me, me);
-      return json(res, 200, { battles: rows });
+      const ids = rows.map((r) => r.id);
+      /** @type {Map<number, Array<{ user_osu_id: number, score: number }>>} */
+      const scoresByBattle = new Map();
+      if (ids.length > 0) {
+        const ph = ids.map(() => "?").join(",");
+        const scoreRows = db
+          .prepare(`SELECT battle_id, user_osu_id, score FROM score_submissions WHERE battle_id IN (${ph})`)
+          .all(...ids);
+        for (const s of scoreRows) {
+          const bid = s.battle_id;
+          if (!scoresByBattle.has(bid)) scoresByBattle.set(bid, []);
+          scoresByBattle.get(bid).push({ user_osu_id: s.user_osu_id, score: s.score });
+        }
+      }
+      const battles = rows.map((r) => ({
+        ...mapBattleRow(r),
+        scores: scoresByBattle.get(r.id) ?? [],
+      }));
+      return json(res, 200, { battles });
     }
 
     if (method === "GET" && /^\/api\/v1\/battles\/\d+$/.test(pathname)) {
@@ -422,7 +518,7 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       );
       if (!b) return json(res, 404, { error: "not_found" });
       const scores = db.prepare(`SELECT * FROM score_submissions WHERE battle_id = ?`).all(id);
-      return json(res, 200, { battle: b, scores });
+      return json(res, 200, { battle: mapBattleRow(b), scores });
     }
 
     if (method === "POST" && /^\/api\/v1\/battles\/\d+\/submit$/.test(pathname)) {
@@ -450,7 +546,7 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       finalizeBattle(db, id);
       const b2 = db.prepare(`SELECT * FROM async_battles WHERE id = ?`).get(id);
       const scores = db.prepare(`SELECT * FROM score_submissions WHERE battle_id = ?`).all(id);
-      return json(res, 200, { battle: b2, scores });
+      return json(res, 200, { battle: mapBattleRow(b2), scores });
     }
 
     return json(res, 404, { error: "not_found" });

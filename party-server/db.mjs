@@ -89,6 +89,14 @@ const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_scores_battle ON score_submissions(battle_id);
   CREATE INDEX IF NOT EXISTS idx_scores_challenge ON score_submissions(challenge_id);
   `,
+  `
+  ALTER TABLE score_submissions ADD COLUMN pp REAL;
+  ALTER TABLE score_submissions ADD COLUMN stars REAL;
+  ALTER TABLE score_submissions ADD COLUMN play_beatmap_id INTEGER;
+  ALTER TABLE score_submissions ADD COLUMN rank_value REAL;
+  ALTER TABLE score_submissions ADD COLUMN baseline_pp_per_star REAL;
+  ALTER TABLE score_submissions ADD COLUMN is_unweighted INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /**
@@ -101,6 +109,11 @@ export function openDatabase(dbPath) {
   db.pragma("foreign_keys = ON");
   for (const sql of MIGRATIONS) {
     db.exec(sql);
+  }
+  try {
+    db.exec(`ALTER TABLE async_battles ADD COLUMN display_json TEXT`);
+  } catch {
+    /* column already exists */
   }
   return db;
 }

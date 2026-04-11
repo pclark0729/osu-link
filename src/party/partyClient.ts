@@ -1,7 +1,17 @@
-import { encodeClientMessage, parseServerMessage, PARTY_PROTOCOL_VERSION, type ClientMessage, type ServerMessage } from "./protocol";
+import {
+  encodeClientMessage,
+  parseServerMessage,
+  PARTY_PROTOCOL_VERSION,
+  type ClientMessage,
+  type LobbyChatWire,
+  type QueuedBeatmapWire,
+  type ServerMessage,
+} from "./protocol";
 import { describePartyWsFailure } from "./partyConnectErrors";
 
 export type PartyConnectionState = "disconnected" | "connecting" | "connected" | "error";
+
+const MAX_LOCAL_CHAT_LINES = 200;
 
 export interface PartyClientState {
   connection: PartyConnectionState;
@@ -11,6 +21,8 @@ export interface PartyClientState {
   lobbyCode: string | null;
   leaderId: string | null;
   members: { id: string; displayName: string }[];
+  queuedMaps: QueuedBeatmapWire[];
+  chat: LobbyChatWire[];
   lastSeq: number;
 }
 
@@ -22,6 +34,8 @@ const initialClientState = (url: string): PartyClientState => ({
   lobbyCode: null,
   leaderId: null,
   members: [],
+  queuedMaps: [],
+  chat: [],
   lastSeq: 0,
 });
 
@@ -96,6 +110,8 @@ export class PartyClient {
             lobbyCode: msg.lobbyCode,
             leaderId: msg.leaderId,
             members: msg.members,
+            queuedMaps: msg.queued,
+            chat: msg.chatTail,
             lastSeq: msg.seq,
             lastError: null,
           };
@@ -113,9 +129,29 @@ export class PartyClient {
           return;
         }
         if (msg.type === "beatmap_queued") {
-          this.state = { ...this.state, lastSeq: msg.seq };
+          this.state = {
+            ...this.state,
+            lastSeq: msg.seq,
+            queuedMaps: msg.queuedAfter,
+          };
           this.emitState();
           this.onEvent({ kind: "beatmap_queued", msg });
+          return;
+        }
+        if (msg.type === "queue_sync") {
+          this.state = {
+            ...this.state,
+            lastSeq: msg.seq,
+            queuedMaps: msg.queued,
+          };
+          this.emitState();
+          return;
+        }
+        if (msg.type === "lobby_chat") {
+          const next = [...this.state.chat, { memberId: msg.memberId, text: msg.text, ts: msg.ts }];
+          while (next.length > MAX_LOCAL_CHAT_LINES) next.shift();
+          this.state = { ...this.state, chat: next };
+          this.emitState();
         }
       };
     };
@@ -276,6 +312,31 @@ export class PartyClient {
       creator: payload.creator,
       coverUrl: payload.coverUrl ?? undefined,
     });
+  }
+
+  sendChat(text: string) {
+    const t = text
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .trim()
+      .slice(0, 280);
+    if (!t) return false;
+    return this.send({ type: "chat", v: PARTY_PROTOCOL_VERSION, text: t });
+  }
+
+  transferLeadership(targetMemberId: string) {
+    return this.send({
+      type: "transfer_leadership",
+      v: PARTY_PROTOCOL_VERSION,
+      targetMemberId,
+    });
+  }
+
+  clearQueue() {
+    return this.send({ type: "clear_queue", v: PARTY_PROTOCOL_VERSION });
+  }
+
+  removeQueueItem(seq: number) {
+    return this.send({ type: "remove_queue_item", v: PARTY_PROTOCOL_VERSION, seq });
   }
 
   leaveLobby() {

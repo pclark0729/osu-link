@@ -1,5 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 /** True when the packaged app can use the updater (not dev server, not browser). */
@@ -14,21 +14,12 @@ export type ManualUpdateResult =
   | { kind: "installed"; version: string }
   | { kind: "error"; message: string };
 
-/** Check GitHub Releases (latest.json), download, install, and relaunch if newer than current build. */
-export async function runAutoUpdate(): Promise<void> {
-  if (!updaterAvailable()) {
-    return;
-  }
-  try {
-    const update = await check();
-    if (!update) {
-      return;
-    }
-    await update.downloadAndInstall();
-    await relaunch();
-  } catch (err) {
-    console.warn("Auto-update check failed:", err);
-  }
+export { check };
+
+/** Download, install, and relaunch (used after user confirms). */
+export async function applyUpdateAndRelaunch(update: Update): Promise<void> {
+  await update.downloadAndInstall();
+  await relaunch();
 }
 
 /**
@@ -47,10 +38,10 @@ export async function checkForUpdatesAndInstall(): Promise<ManualUpdateResult> {
     const v = update.version;
     const ok = window.confirm(`Install osu-link ${v} and restart now?`);
     if (!ok) {
+      await update.close();
       return { kind: "cancelled" };
     }
-    await update.downloadAndInstall();
-    await relaunch();
+    await applyUpdateAndRelaunch(update);
     return { kind: "installed", version: v };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

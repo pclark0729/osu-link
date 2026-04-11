@@ -58,19 +58,34 @@ export function TitleBar() {
     };
   }, [syncMaximized]);
 
+  useEffect(() => {
+    if (maximized) {
+      document.documentElement.setAttribute("data-window-maximized", "true");
+    } else {
+      document.documentElement.removeAttribute("data-window-maximized");
+    }
+  }, [maximized]);
+
   const onMinimize = () => void getCurrentWindow().minimize().catch(() => {});
   const onToggleMax = () => void getCurrentWindow().toggleMaximize().catch(() => {});
   const onClose = () => void getCurrentWindow().close().catch(() => {});
+  const onDragZoneDoubleClick = () => void onToggleMax();
 
   return (
-    <header className="title-bar">
+    <header className="title-bar" data-maximized={maximized ? "true" : undefined}>
       <div className="title-bar-tracks">
         <div
           className="title-bar-zone title-bar-zone-rail"
           data-tauri-drag-region
           aria-label="Move window"
+          onDoubleClick={onDragZoneDoubleClick}
         />
-        <div className="title-bar-zone title-bar-zone-stage" data-tauri-drag-region aria-label="Move window" />
+        <div
+          className="title-bar-zone title-bar-zone-stage"
+          data-tauri-drag-region
+          aria-label="Move window"
+          onDoubleClick={onDragZoneDoubleClick}
+        />
       </div>
       <div className="title-bar-controls">
         <button type="button" className="title-bar-btn title-bar-btn-min" onClick={onMinimize} aria-label="Minimize">

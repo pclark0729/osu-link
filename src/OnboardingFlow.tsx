@@ -83,6 +83,9 @@ export function OnboardingFlow({
 
   const canAdvanceFromOAuth = clientId.trim().length > 0 && clientSecret.trim().length > 0;
 
+  /** Empty override = use default path; non-empty override must resolve (preview_beatmap_dir). */
+  const canAdvanceFromBeatmaps = beatmapOverride.trim() === "" || previewPath.trim() !== "";
+
   const finish = async () => {
     setError(null);
     setBusy(true);
@@ -127,12 +130,16 @@ export function OnboardingFlow({
       <div className="onboarding-card">
         <div className="onboarding-brand">
           <h1>Welcome to osu-link</h1>
-          <p className="onboarding-tagline">Search, collect, and import beatmaps into osu!stable.</p>
+          <p className="onboarding-tagline">Search, collect, import — osu!stable.</p>
         </div>
 
         <nav className="onboarding-steps" aria-label="Setup steps">
           {STEPS.map((label, i) => (
-            <span key={label} className={`onboarding-step-pill ${i === step ? "active" : ""} ${i < step ? "done" : ""}`}>
+            <span
+              key={label}
+              className={`onboarding-step-pill ${i === step ? "active" : ""} ${i < step ? "done" : ""}`}
+              aria-current={i === step ? "step" : undefined}
+            >
               <span className="onboarding-step-num">{i + 1}</span>
               {label}
             </span>
@@ -144,16 +151,15 @@ export function OnboardingFlow({
         {step === 0 && (
           <div className="onboarding-body">
             <p>
-              This setup connects osu-link to your osu! account for <strong>search</strong> (official API). Beatmap files are
-              downloaded from a community mirror — the official download API is only available to the osu! client, not
-              third-party OAuth apps.
+              Connects to your osu! account for <strong>search</strong> (official API). Beatmaps download from a community
+              mirror (the official download API is osu!-client only).
             </p>
             <ul className="onboarding-list">
-              <li>You will create a free <strong>OAuth application</strong> on osu! (one-time).</li>
-              <li>You sign in through your browser; osu-link never sees your osu! password.</li>
-              <li>Beatmaps are saved into your osu! <strong>Songs</strong> folder (we detect it automatically).</li>
+              <li>Create a one-time <strong>OAuth app</strong> on osu!.</li>
+              <li>Sign in in the browser — osu-link never sees your password.</li>
+              <li>Imports go to your osu! <strong>Songs</strong> folder (auto-detected).</li>
             </ul>
-            <p className="hint">Takes about one minute if you already have an osu! account.</p>
+            <p className="hint">~1 min if you already use osu!</p>
             <div className="onboarding-actions">
               <button type="button" className="primary" onClick={() => setStep(1)}>
                 Start setup
@@ -165,24 +171,23 @@ export function OnboardingFlow({
         {step === 1 && (
           <div className="onboarding-body">
             <p>
-              osu! requires a small <strong>OAuth app</strong> tied to <em>your</em> account so the app can call the search API as you.
-              We cannot create this for you automatically.
+              Create an <strong>OAuth app</strong> on your osu! account for search API access (we can&apos;t do this for you).
             </p>
 
             <div className="onboarding-action-grid">
               <button type="button" className="primary" onClick={() => void openNewApp()}>
-                Open osu! — new OAuth app
+                New OAuth app (osu!)
               </button>
               <button type="button" className="secondary" onClick={() => void openAppList()}>
-                I already have an OAuth app
+                Existing OAuth apps
               </button>
             </div>
 
             <div className="onboarding-redirect-box">
-              <span className="field-label">Application callback URL (paste into osu!)</span>
+              <span className="field-label">Callback URL (paste on osu!)</span>
               <code className="onboarding-callback">{OAUTH_REDIRECT_URI}</code>
               <button type="button" className="secondary onboarding-copy" onClick={() => void copyRedirect()}>
-                Copy callback URL
+                Copy URL
               </button>
               {copyHint && <p className="hint copy-hint">{copyHint}</p>}
             </div>
@@ -196,7 +201,7 @@ export function OnboardingFlow({
             <div className="grid-2">
               <label className="field">
                 <span>Client ID</span>
-                <input type="text" autoComplete="off" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="From osu! OAuth page" />
+                <input type="text" autoComplete="off" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="From osu! OAuth" />
               </label>
               <label className="field">
                 <span>Client secret</span>
@@ -211,8 +216,8 @@ export function OnboardingFlow({
             </div>
 
             <p className="hint">
-              Close other osu-link windows before signing in. The app listens on port 42813 during login. Requested scopes:{" "}
-              <code>public</code>, <code>identify</code>, <code>friends.read</code> (Social tab / osu! friends list).
+              Close other osu-link windows before sign-in (login uses port <strong>42813</strong>). Scopes:{" "}
+              <code>public</code>, <code>identify</code>, <code>friends.read</code>.
             </p>
 
             <div className="onboarding-actions">
@@ -228,7 +233,7 @@ export function OnboardingFlow({
 
         {step === 2 && (
           <div className="onboarding-body">
-            <p>We will import beatmaps into this folder (read from osu! or your override):</p>
+            <p>Beatmaps import here (from osu! or your override):</p>
             <div className="onboarding-path-preview">
               <code>{previewPath || "…"}</code>
             </div>
@@ -236,17 +241,22 @@ export function OnboardingFlow({
               <span>Override Songs folder (optional)</span>
               <input
                 type="text"
-                placeholder="Leave empty to use osu!.cfg / default"
+                placeholder="Empty = osu!.cfg / default"
                 value={beatmapOverride}
                 onChange={(e) => setBeatmapOverride(e.target.value)}
               />
             </label>
-            <p className="hint">If osu! is installed normally, you can leave this blank. Press F5 in osu! after importing if maps don’t appear.</p>
+            <p className="hint">Leave blank for a normal install. Press F5 in osu! if imports don&apos;t show.</p>
+            {!canAdvanceFromBeatmaps && beatmapOverride.trim() !== "" && (
+              <p className="hint onboarding-path-error" role="alert">
+                That folder path could not be resolved. Fix the path or clear the field to use the default Songs folder.
+              </p>
+            )}
             <div className="onboarding-actions">
               <button type="button" className="secondary" onClick={() => setStep(1)}>
                 Back
               </button>
-              <button type="button" className="primary" onClick={() => setStep(3)}>
+              <button type="button" className="primary" disabled={!canAdvanceFromBeatmaps} onClick={() => setStep(3)}>
                 Continue
               </button>
             </div>
@@ -256,7 +266,10 @@ export function OnboardingFlow({
         {step === 3 && (
           <div className="onboarding-body">
             <p>
-              <strong>Ready.</strong> We will save your OAuth keys on this PC, then open the browser so you can approve access.
+              <strong>Ready.</strong> Saves OAuth keys locally, then opens the browser to approve access.
+            </p>
+            <p className="hint">
+              Party/social need your party server URL when you use them.
             </p>
             <ul className="onboarding-list compact">
               <li>Client ID: {clientId.trim().slice(0, 6)}…</li>

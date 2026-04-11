@@ -1,11 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useMemo, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import {
   getActiveCollection,
   mapActiveItems,
   type CollectionItem,
   type CollectionStore,
 } from "./models";
+import {
+  loadPresets,
+  loadResultsLayout,
+  mergePresetsFromImportJson,
+  savePresetsList,
+  saveResultsLayout,
+  type ResultsLayout,
+  type SearchFilterSnapshot,
+  type SearchPreset,
+} from "./searchPresetStorage";
 import {
   CURATE_PAGE_CAP,
   CURATE_PICK_COUNT,
@@ -79,6 +89,12 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
   const [curateResults, setCurateResults] = useState<unknown[]>([]);
   const [curating, setCurating] = useState(false);
   const [curateError, setCurateError] = useState<string | null>(null);
+  const [presets, setPresets] = useState<SearchPreset[]>(() => loadPresets());
+  const [resultsLayout, setResultsLayout] = useState<ResultsLayout>(() => loadResultsLayout());
+
+  useEffect(() => {
+    saveResultsLayout(resultsLayout);
+  }, [resultsLayout]);
 
   const activeCollection = getActiveCollection(collectionStore);
   const activeItems = activeCollection?.items ?? [];
@@ -92,6 +108,90 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
       return !localBeatmapsetIds.has(sid);
     });
   }, [rawResults, hideOwnedSearch, localBeatmapsetIds]);
+
+  const buildSnapshot = (): SearchFilterSnapshot => ({
+    query,
+    mode,
+    section,
+    sort,
+    minStars,
+    maxStars,
+    genre,
+    language,
+    extras,
+    general,
+    ranks,
+    nsfw,
+    hideOwnedSearch,
+    noVideo,
+  });
+
+  const applyPreset = (id: string) => {
+    const p = presets.find((x) => x.id === id);
+    if (!p) return;
+    const sn = p.snapshot;
+    setQuery(sn.query);
+    setMode(sn.mode);
+    setSection(sn.section);
+    setSort(sn.sort);
+    setMinStars(sn.minStars);
+    setMaxStars(sn.maxStars);
+    setGenre(sn.genre);
+    setLanguage(sn.language);
+    setExtras(sn.extras);
+    setGeneral(sn.general);
+    setRanks(sn.ranks);
+    setNsfw(sn.nsfw);
+    setHideOwnedSearch(sn.hideOwnedSearch);
+    setNoVideo(sn.noVideo);
+    setRawResults([]);
+    setCursorString(null);
+    setSearchError(null);
+    setTotal(null);
+    setSearchAttempted(false);
+  };
+
+  const savePreset = (name: string): string | null => {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const snapshot = buildSnapshot();
+    const newP: SearchPreset = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: trimmed,
+      snapshot,
+    };
+    const next = [...presets, newP];
+    savePresetsList(next);
+    setPresets(next);
+    pushToast("success", `Saved preset “${trimmed}”.`);
+    return newP.id;
+  };
+
+  const deletePreset = (id: string) => {
+    const next = presets.filter((p) => p.id !== id);
+    savePresetsList(next);
+    setPresets(next);
+  };
+
+  const renamePreset = (id: string, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const next = presets.map((p) => (p.id === id ? { ...p, name: trimmed } : p));
+    savePresetsList(next);
+    setPresets(next);
+    pushToast("success", `Renamed preset to “${trimmed}”.`);
+  };
+
+  const importPresetsFromJsonText = (raw: string) => {
+    const { merged, added } = mergePresetsFromImportJson(presets, raw);
+    if (added === 0) {
+      pushToast("error", "No valid presets found in file.");
+      return;
+    }
+    savePresetsList(merged);
+    setPresets(merged);
+    pushToast("success", `Imported ${added} preset(s).`);
+  };
 
   const runSearch = async (append: boolean) => {
     setSearchError(null);
@@ -349,6 +449,14 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
     showPartyActions,
     showCollectionActions,
     localBeatmapsetIds,
+    presets,
+    applyPreset,
+    savePreset,
+    deletePreset,
+    renamePreset,
+    importPresetsFromJsonText,
+    resultsLayout,
+    setResultsLayout,
   };
 }
 

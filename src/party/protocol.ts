@@ -1,5 +1,5 @@
 /** Wire format version for osu-link party lobbies. Bump when breaking. */
-export const PARTY_PROTOCOL_VERSION = 1 as const;
+export const PARTY_PROTOCOL_VERSION = 2 as const;
 
 export interface PartyMemberWire {
   id: string;
@@ -15,6 +15,13 @@ export interface QueuedBeatmapWire {
   creator?: string;
   coverUrl?: string | null;
   fromMemberId: string;
+}
+
+/** Recent chat lines included in welcome for late joiners */
+export interface LobbyChatWire {
+  memberId: string;
+  text: string;
+  ts: number;
 }
 
 /** Messages client → coordination server */
@@ -40,7 +47,11 @@ export type ClientMessage =
       creator?: string;
       coverUrl?: string | null;
     }
-  | { type: "leave_lobby"; v: typeof PARTY_PROTOCOL_VERSION };
+  | { type: "leave_lobby"; v: typeof PARTY_PROTOCOL_VERSION }
+  | { type: "chat"; v: typeof PARTY_PROTOCOL_VERSION; text: string }
+  | { type: "transfer_leadership"; v: typeof PARTY_PROTOCOL_VERSION; targetMemberId: string }
+  | { type: "clear_queue"; v: typeof PARTY_PROTOCOL_VERSION }
+  | { type: "remove_queue_item"; v: typeof PARTY_PROTOCOL_VERSION; seq: number };
 
 /** Messages server → client */
 export type ServerMessage =
@@ -53,6 +64,7 @@ export type ServerMessage =
       leaderId: string;
       members: PartyMemberWire[];
       queued: QueuedBeatmapWire[];
+      chatTail: LobbyChatWire[];
       seq: number;
     }
   | {
@@ -73,6 +85,21 @@ export type ServerMessage =
       title?: string;
       creator?: string;
       coverUrl?: string | null;
+      /** Full lobby queue after this enqueue (avoids a separate round-trip). */
+      queuedAfter: QueuedBeatmapWire[];
+    }
+  | {
+      type: "queue_sync";
+      v: typeof PARTY_PROTOCOL_VERSION;
+      queued: QueuedBeatmapWire[];
+      seq: number;
+    }
+  | {
+      type: "lobby_chat";
+      v: typeof PARTY_PROTOCOL_VERSION;
+      memberId: string;
+      text: string;
+      ts: number;
     };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -99,6 +126,7 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     const seq = typeof data.seq === "number" ? data.seq : 0;
     const members = parseMembers(data.members);
     const queued = parseQueued(data.queued);
+    const chatTail = parseChatTail(data.chatTail);
     if (!selfId || !lobbyCode) return null;
     return {
       type: "welcome",
@@ -108,6 +136,7 @@ export function parseServerMessage(raw: string): ServerMessage | null {
       leaderId,
       members,
       queued,
+      chatTail,
       seq,
     };
   }
@@ -125,6 +154,7 @@ export function parseServerMessage(raw: string): ServerMessage | null {
   if (t === "beatmap_queued") {
     const setId = Number(data.setId);
     if (!Number.isFinite(setId)) return null;
+    const queuedAfter = parseQueued(data.queuedAfter);
     return {
       type: "beatmap_queued",
       v: PARTY_PROTOCOL_VERSION,
@@ -141,6 +171,29 @@ export function parseServerMessage(raw: string): ServerMessage | null {
           : data.coverUrl === null
             ? null
             : undefined,
+      queuedAfter,
+    };
+  }
+  if (t === "queue_sync") {
+    return {
+      type: "queue_sync",
+      v: PARTY_PROTOCOL_VERSION,
+      queued: parseQueued(data.queued),
+      seq: typeof data.seq === "number" ? data.seq : 0,
+    };
+  }
+  if (t === "lobby_chat") {
+    const ts = Number(data.ts);
+    if (!Number.isFinite(ts)) return null;
+    const memberId = typeof data.memberId === "string" ? data.memberId : "";
+    const text = typeof data.text === "string" ? data.text : "";
+    if (!memberId || !text) return null;
+    return {
+      type: "lobby_chat",
+      v: PARTY_PROTOCOL_VERSION,
+      memberId,
+      text,
+      ts,
     };
   }
   return null;
@@ -180,6 +233,20 @@ function parseQueued(v: unknown): QueuedBeatmapWire[] {
             : undefined,
       fromMemberId: typeof x.fromMemberId === "string" ? x.fromMemberId : "",
     });
+  }
+  return out;
+}
+
+function parseChatTail(v: unknown): LobbyChatWire[] {
+  if (!Array.isArray(v)) return [];
+  const out: LobbyChatWire[] = [];
+  for (const x of v) {
+    if (!isRecord(x)) continue;
+    const memberId = typeof x.memberId === "string" ? x.memberId : "";
+    const text = typeof x.text === "string" ? x.text : "";
+    const ts = Number(x.ts);
+    if (!memberId || !text || !Number.isFinite(ts)) continue;
+    out.push({ memberId, text, ts });
   }
   return out;
 }

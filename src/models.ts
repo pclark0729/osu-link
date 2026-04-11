@@ -26,6 +26,15 @@ export function getActiveCollection(store: CollectionStore): BeatmapCollection |
   return store.collections.find((c) => c.id === id) ?? store.collections[0];
 }
 
+/** Unique display name among existing collection names (used for imports and duplicate). */
+export function uniqueCollectionName(desired: string, existing: string[]): string {
+  const base = desired.trim() || "Collection";
+  if (!existing.includes(base)) return base;
+  let n = 2;
+  while (existing.includes(`${base} (${n})`)) n += 1;
+  return `${base} (${n})`;
+}
+
 export function mapActiveItems(
   store: CollectionStore,
   fn: (items: CollectionItem[]) => CollectionItem[],

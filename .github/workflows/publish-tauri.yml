@@ -1,5 +1,18 @@
 # Build desktop installers and updater metadata (latest.json) for GitHub Releases.
-# Add repo secret TAURI_SIGNING_PRIVATE_KEY with the contents of .tauri/osu-link.key (or rotate keys and update pubkey in tauri.conf.json).
+#
+# Signing (required for updater installs):
+# - Generate a key pair (see Tauri updater docs: `tauri signer generate`).
+# - Put the PUBLIC key in src-tauri/tauri.conf.json → plugins.updater.pubkey (committed).
+# - Put the PRIVATE key in repo secret TAURI_SIGNING_PRIVATE_KEY (same key that matches pubkey).
+# - If the private key is encrypted, set TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+# Rotating keys: generate a new pair, update pubkey in tauri.conf.json, ship a new app build,
+# then use the new private key in CI for future releases.
+#
+# Before build, the app semver is taken from the git tag (v1.2.3 → 1.2.3) so latest.json
+# matches the release. If you only bump the tag but leave tauri.conf.json at 0.1.0, the
+# updater compares 0.1.0 == 0.1.0 and always reports "up to date".
+#
+# Release checklist: RELEASING.md
 name: publish-tauri
 
 on:
@@ -31,6 +44,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
+
+      - name: Sync app version from release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "Tag must be vX.Y.Z (got $TAG)"
+            exit 1
+          fi
+          echo "Building version $VERSION from tag $TAG"
+          npm version "$VERSION" --no-git-tag-version
+          node scripts/sync-tauri-version.mjs "$VERSION"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable

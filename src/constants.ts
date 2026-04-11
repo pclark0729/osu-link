@@ -40,9 +40,3 @@ export const OAUTH_REDIRECT_URI = "http://127.0.0.1:42813/callback";
 export const OSU_OAUTH_NEW_APP_URL = "https://osu.ppy.sh/home/account/oauth/new";
 
 export const OSU_OAUTH_LIST_URL = "https://osu.ppy.sh/home/account/oauth";
-
-/** Default global shortcut for the in-game overlay (Tauri `register` format). */
-export const DEFAULT_OVERLAY_HOTKEY = "Shift+Tab";
-
-/** Default shortcut to focus the overlay for typing (must differ from {@link DEFAULT_OVERLAY_HOTKEY}). */
-export const DEFAULT_OVERLAY_FOCUS_HOTKEY = "Ctrl+Shift+F";

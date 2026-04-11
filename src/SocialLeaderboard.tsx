@@ -17,6 +17,17 @@ import {
 } from "recharts";
 import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
 
+const RECHARTS_TOOLTIP_PROPS = {
+  contentStyle: {
+    background: "var(--surface-2)",
+    border: "1px solid var(--border-strong)",
+    borderRadius: "var(--radius-sm)",
+    color: "var(--text)",
+  },
+  labelStyle: { color: "var(--text-secondary)" },
+  itemStyle: { color: "var(--text)" },
+} as const;
+
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
@@ -519,8 +530,7 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
     <div className="social-section social-leaderboard-section">
       {lbBusy && <p className="hint social-lb-loading" aria-live="polite">Loading leaderboard…</p>}
       <p className="hint social-lb-intro">
-        Rankings use the official osu! API (one request per friend for stats
-        {includeRecent ? ", plus recent scores for sparklines" : ""}). Large friend lists mean more API calls on refresh.
+        Each refresh fetches stats for everyone{includeRecent ? "; recent charts add more API calls" : ""}.
       </p>
 
       <div className="social-card social-lb-toolbar">
@@ -541,12 +551,12 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
         </div>
         <label className="field social-lb-toggle">
           <input type="checkbox" checked={includeRecent} disabled={disabled} onChange={(e) => setIncludeRecent(e.target.checked)} />
-          <span>Include recent score charts (~2× API calls)</span>
+          <span>Include recent charts (more API calls)</span>
         </label>
       </div>
 
       {participants.length === 0 ? (
-        <p className="hint">Add osu-link or osu! web friends to compare. Your profile appears when signed in.</p>
+        <p className="hint">Add friends to compare; your profile shows when signed in.</p>
       ) : (
         <>
           <div className="social-lb-charts">
@@ -560,6 +570,7 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
                       <XAxis type="number" tick={{ fontSize: 11 }} />
                       <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11 }} />
                       <Tooltip
+                        {...RECHARTS_TOOLTIP_PROPS}
                         formatter={(v: number) => [`${v} pp`, "PP"]}
                         labelFormatter={(label) => {
                           const row = ppChartData.find((d) => d.name === label);
@@ -587,7 +598,7 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
                       <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
                       <XAxis dataKey="name" />
                       <YAxis />
-                      <Tooltip />
+                      <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {gradeAgg.map((e, i) => (
                           <Cell key={i} fill={e.fill} />

@@ -1,6 +1,8 @@
 # osu-link party server
 
-Small **WebSocket** server that matches the protocol in [`../src/party/protocol.ts`](../src/party/protocol.ts). It only relays lobby messages (codes, roster, beatmap queue); it does **not** serve `.osz` files.
+Small **WebSocket** server that matches the protocol in [`../src/party/protocol.ts`](../src/party/protocol.ts). It only relays lobby messages (codes, roster, beatmap queue, lobby chat); it does **not** serve `.osz` files.
+
+**Protocol version 2** — The server speaks **only** `v: 2` on the wire (lobby chat, queue management, `queuedAfter` on `beatmap_queued`, `chatTail` on `welcome`). Deploy this `party-server` together with an osu-link build that uses protocol v2; older clients using `v: 1` will be rejected with “Unsupported protocol version”.
 
 ## Requirements
 

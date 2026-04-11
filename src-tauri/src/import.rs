@@ -9,6 +9,23 @@ pub fn looks_like_zip(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b && bytes[2] == 0x03 && bytes[3] == 0x04
 }
 
+#[cfg(test)]
+mod tests {
+    use super::looks_like_zip;
+
+    #[test]
+    fn looks_like_zip_accepts_local_header() {
+        assert!(looks_like_zip(&[0x50, 0x4b, 0x03, 0x04, 0x00]));
+    }
+
+    #[test]
+    fn looks_like_zip_rejects_short_and_non_zip() {
+        assert!(!looks_like_zip(&[]));
+        assert!(!looks_like_zip(&[0x50, 0x4b, 0x03]));
+        assert!(!looks_like_zip(b"not-a-zip"));
+    }
+}
+
 fn parse_audio_filename(osu_head: &str) -> Option<String> {
     for line in osu_head.lines() {
         let t = line.trim_start();
