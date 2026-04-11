@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
-import { OAUTH_REDIRECT_URI, OSU_OAUTH_LIST_URL, OSU_OAUTH_NEW_APP_URL } from "./constants";
+import {
+  DEFAULT_HOTKEY_FOCUS_SEARCH,
+  DEFAULT_HOTKEY_RANDOM_CURATE,
+  OAUTH_REDIRECT_URI,
+  OSU_OAUTH_LIST_URL,
+  OSU_OAUTH_NEW_APP_URL,
+} from "./constants";
 
 const STEPS = ["Welcome", "osu! connection", "Beatmaps folder", "Finish"];
 
@@ -101,6 +107,8 @@ export function OnboardingFlow({
               ? initialPartyServerUrl.trim()
               : null,
           socialApiBaseUrl: null,
+          hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
+          hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
         },
       });
       await invoke("oauth_login");
@@ -115,6 +123,8 @@ export function OnboardingFlow({
               ? initialPartyServerUrl.trim()
               : null,
           socialApiBaseUrl: null,
+          hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
+          hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
         },
       });
       onFinished();

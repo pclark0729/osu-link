@@ -34,6 +34,10 @@ export function defaultPartyWsUrlFromSettings(saved: string | null | undefined):
   return PUBLIC_PARTY_WS_URL ?? DEFAULT_PARTY_WS_URL;
 }
 
+/** Default global shortcuts (Tauri format); persisted in settings. */
+export const DEFAULT_HOTKEY_FOCUS_SEARCH = "Alt+Shift+O";
+export const DEFAULT_HOTKEY_RANDOM_CURATE = "Alt+Shift+R";
+
 /** Must match `OAUTH_LOOPBACK_PORT` in `src-tauri/src/oauth.rs`. */
 export const OAUTH_REDIRECT_URI = "http://127.0.0.1:42813/callback";
 

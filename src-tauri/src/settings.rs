@@ -21,6 +21,20 @@ pub struct Settings {
     /// Optional HTTPS base for social REST API (e.g. https://127.0.0.1:4681). If unset, derived from `party_server_url`.
     #[serde(default)]
     pub social_api_base_url: Option<String>,
+    /// Global shortcut to focus the window and search field (Tauri format, e.g. Alt+Shift+O). Empty = disabled.
+    #[serde(default = "default_hotkey_focus_search")]
+    pub hotkey_focus_search: String,
+    /// Global shortcut to download one random map from Curate → Discover pool. Empty = disabled.
+    #[serde(default = "default_hotkey_random_curate")]
+    pub hotkey_random_curate: String,
+}
+
+fn default_hotkey_focus_search() -> String {
+    "Alt+Shift+O".to_string()
+}
+
+fn default_hotkey_random_curate() -> String {
+    "Alt+Shift+R".to_string()
 }
 
 impl Default for Settings {
@@ -32,6 +46,8 @@ impl Default for Settings {
             onboarding_completed: false,
             party_server_url: None,
             social_api_base_url: None,
+            hotkey_focus_search: default_hotkey_focus_search(),
+            hotkey_random_curate: default_hotkey_random_curate(),
         }
     }
 }

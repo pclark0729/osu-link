@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type ChangeEvent,
   type UIEvent,
@@ -16,6 +17,8 @@ import {
   serializeSharedCollection,
 } from "./collectionShare";
 import {
+  DEFAULT_HOTKEY_FOCUS_SEARCH,
+  DEFAULT_HOTKEY_RANDOM_CURATE,
   DEFAULT_PARTY_WS_URL,
   PARTY_SERVER_URL_UI_HIDDEN,
   PUBLIC_PARTY_WS_URL,
@@ -43,6 +46,9 @@ import { resolveSocialApiBaseUrl } from "./socialApiUrl";
 import { SocialPanel } from "./SocialPanel";
 import { TitleBar } from "./TitleBar";
 import { useSearchDownloadState } from "./useSearchDownloadState";
+import { useGlobalHotkeys } from "./useGlobalHotkeys";
+import { DownloadLogsPanel } from "./DownloadLogsPanel";
+import { DOWNLOAD_LOG_MAX, newDownloadLogId, type DownloadLogEntry } from "./downloadLog";
 import packageJson from "../package.json";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { applyUpdateAndRelaunch, check, checkForUpdatesAndInstall, updaterAvailable } from "./autoUpdate";
@@ -60,6 +66,8 @@ interface Settings {
   onboardingCompleted: boolean;
   partyServerUrl: string | null;
   socialApiBaseUrl: string | null;
+  hotkeyFocusSearch: string;
+  hotkeyRandomCurate: string;
 }
 
 function randomId(): string {
@@ -162,6 +170,19 @@ function IconStats() {
   );
 }
 
+function IconLogs() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M8 6h13M8 12h13M8 18h13M4 6h.01M4 12h.01M4 18h.01"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 const initialPartyState = (url: string): PartyClientState => ({
   connection: "disconnected",
   lastError: null,
@@ -176,7 +197,7 @@ const initialPartyState = (url: string): PartyClientState => ({
 });
 
 /** Primary destinations — copy aligned with NN/g recognition & real-world task names. */
-type AppTab = "search" | "collection" | "party" | "social" | "stats" | "settings";
+type AppTab = "search" | "collection" | "party" | "social" | "stats" | "logs" | "settings";
 
 const VIEW_COPY: Record<AppTab, { title: string; subtitle: string }> = {
   search: {
@@ -198,6 +219,10 @@ const VIEW_COPY: Record<AppTab, { title: string; subtitle: string }> = {
   stats: {
     title: "Stats",
     subtitle: "Performance trends and charts from your recent scores.",
+  },
+  logs: {
+    title: "Logs",
+    subtitle: "History of beatmap downloads and import paths.",
   },
   settings: {
     title: "Settings",
@@ -324,6 +349,10 @@ export default function App() {
   const [titleBarPeek, setTitleBarPeek] = useState(false);
   const titleBarPeekTimerRef = useRef<number | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
+  const searchQueryRef = useRef<HTMLInputElement | null>(null);
+  const [searchFocusNonce, setSearchFocusNonce] = useState(0);
+  const focusSearchHotkeyRef = useRef<() => void>(() => {});
+  const randomCurateHotkeyRef = useRef<() => void>(() => {});
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [tab, setTab] = useState<AppTab>("search");
   const [settings, setSettings] = useState<Settings>({
@@ -333,6 +362,8 @@ export default function App() {
     onboardingCompleted: false,
     partyServerUrl: null,
     socialApiBaseUrl: null,
+    hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
+    hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
   });
   const [resolvedSongs, setResolvedSongs] = useState<string>("");
   const [authLabel, setAuthLabel] = useState<string>("Signed out");
@@ -349,6 +380,7 @@ export default function App() {
   const [appVersion, setAppVersion] = useState<string>("—");
   const [updateBusy, setUpdateBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [downloadLogs, setDownloadLogs] = useState<DownloadLogEntry[]>([]);
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useState(loadDesktopNotificationsEnabled);
   const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
   const localLibraryRef = useRef<Set<number>>(new Set());
@@ -362,6 +394,7 @@ export default function App() {
   /** When true, user chose Disconnect and we skip auto-connect until they Connect again. */
   const partyUserPrefersOfflineRef = useRef(false);
   const pushToastRef = useRef<(tone: Toast["tone"], message: string) => void>(() => {});
+  const appendDownloadLogRef = useRef<(entry: Omit<DownloadLogEntry, "id" | "at">) => void>(() => {});
   const partyImportChain = useRef(Promise.resolve());
 
   useEffect(() => {
@@ -386,6 +419,17 @@ export default function App() {
 
   const pushToast = useCallback((tone: Toast["tone"], message: string) => {
     setToast({ tone, message });
+  }, []);
+
+  const appendDownloadLog = useCallback((entry: Omit<DownloadLogEntry, "id" | "at">) => {
+    setDownloadLogs((prev) => {
+      const row: DownloadLogEntry = { ...entry, id: newDownloadLogId(), at: Date.now() };
+      return [row, ...prev].slice(0, DOWNLOAD_LOG_MAX);
+    });
+  }, []);
+
+  const clearDownloadLogs = useCallback(() => {
+    setDownloadLogs([]);
   }, []);
 
   const handleCheckForUpdates = useCallback(async () => {
@@ -439,7 +483,8 @@ export default function App() {
 
   useEffect(() => {
     pushToastRef.current = pushToast;
-  }, [pushToast]);
+    appendDownloadLogRef.current = appendDownloadLog;
+  }, [pushToast, appendDownloadLog]);
 
   useEffect(() => {
     if (isTauri()) {
@@ -482,9 +527,24 @@ export default function App() {
               "success",
               `Party: ${label} imported — ${path}. Press F5 in osu! if needed.`,
             );
+            appendDownloadLogRef.current({
+              source: "party",
+              beatmapsetId: msg.setId,
+              label,
+              status: "success",
+              importPath: path,
+            });
             void reloadLocalLibraryRef.current();
           } catch (e) {
-            pushToastRef.current("error", `Party import failed (${label}): ${String(e)}`);
+            const err = String(e);
+            pushToastRef.current("error", `Party import failed (${label}): ${err}`);
+            appendDownloadLogRef.current({
+              source: "party",
+              beatmapsetId: msg.setId,
+              label,
+              status: "error",
+              errorMessage: err,
+            });
           }
         });
       }
@@ -547,6 +607,8 @@ export default function App() {
         onboardingCompleted: s.onboardingCompleted !== false,
         partyServerUrl: s.partyServerUrl ?? null,
         socialApiBaseUrl: s.socialApiBaseUrl ?? null,
+        hotkeyFocusSearch: s.hotkeyFocusSearch ?? DEFAULT_HOTKEY_FOCUS_SEARCH,
+        hotkeyRandomCurate: s.hotkeyRandomCurate ?? DEFAULT_HOTKEY_RANDOM_CURATE,
       });
     } catch {
       setSettings((prev) => ({ ...prev, onboardingCompleted: true }));
@@ -566,6 +628,8 @@ export default function App() {
           onboardingCompleted: s.onboardingCompleted !== false,
           partyServerUrl: s.partyServerUrl ?? null,
           socialApiBaseUrl: s.socialApiBaseUrl ?? null,
+          hotkeyFocusSearch: s.hotkeyFocusSearch ?? DEFAULT_HOTKEY_FOCUS_SEARCH,
+          hotkeyRandomCurate: s.hotkeyRandomCurate ?? DEFAULT_HOTKEY_RANDOM_CURATE,
         });
         const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
         partyClientRef.current?.setUrl(urls[0]);
@@ -711,6 +775,8 @@ export default function App() {
             settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
               ? settings.socialApiBaseUrl.trim()
               : null,
+          hotkeyFocusSearch: settings.hotkeyFocusSearch.trim(),
+          hotkeyRandomCurate: settings.hotkeyRandomCurate.trim(),
         },
       });
       setSettings((prev) => ({ ...prev, onboardingCompleted: false }));
@@ -838,6 +904,48 @@ export default function App() {
     localIdsRef: localLibraryRef,
     noVideo,
     setNoVideo,
+    appendDownloadLog,
+  });
+
+  const focusSearchFromHotkey = useCallback(() => {
+    if (isTauri()) {
+      void getCurrentWindow()
+        .show()
+        .then(() => getCurrentWindow().setFocus())
+        .catch(() => {});
+    }
+    setTab("search");
+    setSearchFocusNonce((n) => n + 1);
+  }, []);
+
+  const onHotkeyDuplicate = useCallback(() => {
+    pushToast(
+      "error",
+      "Global hotkeys: focus search and random curate cannot use the same shortcut. Only focus search is active.",
+    );
+  }, [pushToast]);
+
+  const onHotkeyRegisterError = useCallback(
+    (message: string) => {
+      pushToast("error", message.startsWith("Global shortcut:") ? message : `Global shortcut: ${message}`);
+    },
+    [pushToast],
+  );
+
+  focusSearchHotkeyRef.current = focusSearchFromHotkey;
+  randomCurateHotkeyRef.current = () => {
+    void searchDl.downloadRandomCurateDiscover();
+  };
+
+  useGlobalHotkeys({
+    bootReady,
+    onboardingCompleted: settings.onboardingCompleted,
+    focusShortcut: settings.hotkeyFocusSearch,
+    randomCurateShortcut: settings.hotkeyRandomCurate,
+    onFocusSearchRef: focusSearchHotkeyRef,
+    onRandomCurateRef: randomCurateHotkeyRef,
+    onDuplicateShortcuts: onHotkeyDuplicate,
+    onRegisterError: onHotkeyRegisterError,
   });
 
   const onMainScroll = useCallback((e: UIEvent<HTMLElement>) => {
@@ -856,11 +964,19 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const k = e.key;
-      if (k < "1" || k > "6") return;
+      if (k < "1" || k > "7") return;
       const t = e.target;
       if (t instanceof Element && t.closest("input, textarea, select, [contenteditable='true']")) return;
       e.preventDefault();
-      const order: Array<typeof tab> = ["search", "collection", "party", "social", "stats", "settings"];
+      const order: Array<typeof tab> = [
+        "search",
+        "collection",
+        "party",
+        "social",
+        "stats",
+        "logs",
+        "settings",
+      ];
       setTab(order[parseInt(k, 10) - 1]);
     };
     window.addEventListener("keydown", onKey);
@@ -889,6 +1005,8 @@ export default function App() {
           onboardingCompleted: settings.onboardingCompleted,
           partyServerUrl: partyUrl,
           socialApiBaseUrl: socialUrl,
+          hotkeyFocusSearch: settings.hotkeyFocusSearch.trim(),
+          hotkeyRandomCurate: settings.hotkeyRandomCurate.trim(),
         },
       });
       const wsUrl = defaultPartyWsUrlFromSettings(partyUrl);
@@ -925,6 +1043,8 @@ export default function App() {
       items.map((c) => (c.id === item.id ? { ...c, status: "downloading", error: null } : c)),
     );
     await persistStore(downloading);
+    const label =
+      `${item.artist} - ${item.title}`.trim() || `Set #${item.beatmapsetId}`;
     try {
       const path = await invoke<string>("download_and_import", {
         setId: item.beatmapsetId,
@@ -937,10 +1057,24 @@ export default function App() {
       const msg = `Imported to: ${path}. Press F5 in osu! if the map does not appear.`;
       setSettingsMsg(msg);
       pushToast("success", msg);
+      appendDownloadLog({
+        source: "collection",
+        beatmapsetId: item.beatmapsetId,
+        label,
+        status: "success",
+        importPath: path,
+      });
       await refreshPaths();
     } catch (e) {
       const msg = String(e);
       pushToast("error", msg);
+      appendDownloadLog({
+        source: "collection",
+        beatmapsetId: item.beatmapsetId,
+        label,
+        status: "error",
+        errorMessage: msg,
+      });
       const err = mapActiveItems(storeRef.current, (items) =>
         items.map((c) => (c.id === item.id ? { ...c, status: "error", error: msg } : c)),
       );
@@ -1237,10 +1371,22 @@ export default function App() {
           </button>
           <button
             type="button"
+            className={`side-nav-item ${tab === "logs" ? "active" : ""}`}
+            onClick={() => setTab("logs")}
+            aria-current={tab === "logs" ? "page" : undefined}
+            title="Download history and import paths · Alt+6"
+          >
+            <span className="side-nav-icon">
+              <IconLogs />
+            </span>
+            <span className="side-nav-text">Logs</span>
+          </button>
+          <button
+            type="button"
             className={`side-nav-item ${tab === "settings" ? "active" : ""}`}
             onClick={() => setTab("settings")}
             aria-current={tab === "settings" ? "page" : undefined}
-            title="Account, OAuth, paths, and notifications · Alt+6"
+            title="Account, OAuth, paths, and notifications · Alt+7"
           >
             <span className="side-nav-icon">
               <IconSettings />
@@ -1251,7 +1397,7 @@ export default function App() {
 
         <div className="side-footer">
           <div className="auth-compact">{authLabel}</div>
-          <p className="side-nav-shortcut-hint">Alt+1–6 switch tabs</p>
+          <p className="side-nav-shortcut-hint">Alt+1–7 switch tabs</p>
           <p className="side-credit">Made by Peyton</p>
         </div>
       </aside>
@@ -1293,6 +1439,10 @@ export default function App() {
 
         {tab === "stats" && (
           <PersonalStatsPanel onToast={(tone, message) => pushToast(tone, message)} />
+        )}
+
+        {tab === "logs" && (
+          <DownloadLogsPanel entries={downloadLogs} onClear={clearDownloadLogs} onToast={pushToast} />
         )}
 
         {tab === "party" && (
@@ -1366,8 +1516,60 @@ export default function App() {
               <div className="settings-disclosure-body">
                 <p className="hint settings-shortcuts-hint">
                   <strong>Main window:</strong> Alt+1 Search · Alt+2 Collections · Alt+3 Party · Alt+4 Social · Alt+5
-                  Stats · Alt+6 Settings
+                  Stats · Alt+6 Logs · Alt+7 Settings
                 </p>
+                {isTauri() && (
+                  <>
+                    <p className="hint u-mb-3">
+                      <strong>Global (desktop app):</strong> work even when osu-link is in the background. Use{" "}
+                      <a
+                        href="https://v2.tauri.app/plugin/global-shortcut/"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Tauri shortcut syntax
+                      </a>{" "}
+                      (e.g. <code>Alt+Shift+O</code>, <code>Control+Shift+R</code>). Leave empty to disable.
+                    </p>
+                    <div className="grid-2">
+                      <label className="field">
+                        <span>Focus window &amp; search</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder={DEFAULT_HOTKEY_FOCUS_SEARCH}
+                          value={settings.hotkeyFocusSearch}
+                          onChange={(e) => setSettings({ ...settings, hotkeyFocusSearch: e.target.value })}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Random curate download</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder={DEFAULT_HOTKEY_RANDOM_CURATE}
+                          value={settings.hotkeyRandomCurate}
+                          onChange={(e) => setSettings({ ...settings, hotkeyRandomCurate: e.target.value })}
+                        />
+                      </label>
+                    </div>
+                    <div className="row-actions row-actions--spaced u-mt-3">
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() =>
+                          setSettings((s) => ({
+                            ...s,
+                            hotkeyFocusSearch: "",
+                            hotkeyRandomCurate: "",
+                          }))
+                        }
+                      >
+                        Clear global hotkeys
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </details>
 
@@ -1548,6 +1750,8 @@ export default function App() {
         {tab === "search" && (
           <SearchDownloadPanel
             s={searchDl}
+            heroQueryRef={searchQueryRef}
+            searchFocusNonce={searchFocusNonce}
             onInspectSet={(raw) => {
               const id = Number((raw as Record<string, unknown>).id);
               if (!Number.isFinite(id)) return;

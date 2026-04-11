@@ -24,6 +24,7 @@ import {
   type Mode,
   type SearchInput,
 } from "./searchTypes";
+import type { DownloadLogEntry } from "./downloadLog";
 
 export interface SearchDownloadDeps {
   pushToast: (tone: "info" | "success" | "error", message: string) => void;
@@ -46,6 +47,7 @@ export interface SearchDownloadDeps {
   localIdsRef: MutableRefObject<Set<number>>;
   noVideo: boolean;
   setNoVideo: Dispatch<SetStateAction<boolean>>;
+  appendDownloadLog: (entry: Omit<DownloadLogEntry, "id" | "at">) => void;
 }
 
 export function useSearchDownloadState(deps: SearchDownloadDeps) {
@@ -64,6 +66,7 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
     localIdsRef,
     noVideo,
     setNoVideo,
+    appendDownloadLog,
   } = deps;
 
   const [query, setQuery] = useState("");
@@ -240,52 +243,57 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
     }
   };
 
+  const buildCurateDiscoverPool = async (): Promise<unknown[]> => {
+    const pool: unknown[] = [];
+    let cursor: string | null = null;
+    const local = localIdsRef.current;
+    let pages = 0;
+    while (pages < CURATE_PAGE_CAP) {
+      pages += 1;
+      const input: SearchInput = {
+        q: query.trim() || null,
+        m: MODE_API[mode],
+        s: section,
+        sort,
+        cursor_string: cursor,
+        g:
+          genre.trim() === ""
+            ? null
+            : Number.isFinite(Number(genre))
+              ? Number(genre)
+              : null,
+        l:
+          language.trim() === ""
+            ? null
+            : Number.isFinite(Number(language))
+              ? Number(language)
+              : null,
+        e: extras.trim() || null,
+        c: general.trim() || null,
+        r: ranks.trim() || null,
+        nsfw: nsfw || null,
+      };
+      const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
+      const sets = filterSetsByModeAndStars((res.beatmapsets as unknown[]) || [], mode, minStars, maxStars);
+      for (const s of sets) {
+        const id = Number((s as Record<string, unknown>).id);
+        if (!Number.isFinite(id) || local.has(id)) continue;
+        pool.push(s);
+      }
+      if (pool.length >= CURATE_PICK_COUNT * 3) break;
+      const cur = res.cursor_string as string | undefined | null;
+      cursor = cur && cur.length > 0 ? cur : null;
+      if (!cursor) break;
+    }
+    return pool;
+  };
+
   const runCurateDiscover = async () => {
     setCurateError(null);
     setCurating(true);
     setCurateResults([]);
     try {
-      const pool: unknown[] = [];
-      let cursor: string | null = null;
-      const local = localIdsRef.current;
-      let pages = 0;
-      while (pages < CURATE_PAGE_CAP) {
-        pages += 1;
-        const input: SearchInput = {
-          q: query.trim() || null,
-          m: MODE_API[mode],
-          s: section,
-          sort,
-          cursor_string: cursor,
-          g:
-            genre.trim() === ""
-              ? null
-              : Number.isFinite(Number(genre))
-                ? Number(genre)
-                : null,
-          l:
-            language.trim() === ""
-              ? null
-              : Number.isFinite(Number(language))
-                ? Number(language)
-                : null,
-          e: extras.trim() || null,
-          c: general.trim() || null,
-          r: ranks.trim() || null,
-          nsfw: nsfw || null,
-        };
-        const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
-        const sets = filterSetsByModeAndStars((res.beatmapsets as unknown[]) || [], mode, minStars, maxStars);
-        for (const s of sets) {
-          const id = Number((s as Record<string, unknown>).id);
-          if (!Number.isFinite(id) || local.has(id)) continue;
-          pool.push(s);
-        }
-        if (pool.length >= CURATE_PICK_COUNT * 3) break;
-        const cur = res.cursor_string as string | undefined | null;
-        cursor = cur && cur.length > 0 ? cur : null;
-        if (!cursor) break;
-      }
+      const pool = await buildCurateDiscoverPool();
       const arr = [...pool];
       for (let i = arr.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -375,24 +383,85 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
     void persistStore(mapActiveItems(store, (items) => [...items, item]));
   };
 
-  const importFromSearch = async (beatmapsetId: number) => {
+  const importFromSearch = async (
+    beatmapsetId: number,
+    opts?: { mapLabel?: string },
+  ) => {
     setSettingsMsg(null);
     setDirectImportSetId(beatmapsetId);
+    const label =
+      opts?.mapLabel?.trim() && opts.mapLabel.trim().length > 0
+        ? opts.mapLabel.trim()
+        : `Set #${beatmapsetId}`;
     try {
       const path = await invoke<string>("download_and_import", {
         setId: beatmapsetId,
         noVideo,
       });
-      const msg = `Imported to: ${path}. Press F5 in osu! if the map does not appear.`;
+      const msg = opts?.mapLabel
+        ? `Downloaded: ${opts.mapLabel}. Imported to: ${path}. Press F5 in osu! song select if the map does not appear.`
+        : `Imported to: ${path}. Press F5 in osu! if the map does not appear.`;
       setSettingsMsg(msg);
       pushToast("success", msg);
+      appendDownloadLog({
+        source: "search",
+        beatmapsetId,
+        label,
+        status: "success",
+        importPath: path,
+      });
       await refreshPaths();
     } catch (e) {
       const msg = String(e);
       setSettingsMsg(msg);
       pushToast("error", msg);
+      appendDownloadLog({
+        source: "search",
+        beatmapsetId,
+        label,
+        status: "error",
+        errorMessage: msg,
+      });
     } finally {
       setDirectImportSetId(null);
+    }
+  };
+
+  const downloadRandomCurateDiscover = async () => {
+    if (curating || directImportSetId !== null) {
+      pushToast("info", "A curate or import is already in progress.");
+      return;
+    }
+    setCurateError(null);
+    setCurating(true);
+    try {
+      const pool = await buildCurateDiscoverPool();
+      if (pool.length === 0) {
+        pushToast(
+          "error",
+          "No eligible maps for current curate filters, or you already own everything we found. Try widening filters.",
+        );
+        return;
+      }
+      const arr = [...pool];
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      const chosen = arr[0] as Record<string, unknown>;
+      const id = Number(chosen.id);
+      if (!Number.isFinite(id)) {
+        pushToast("error", "Invalid beatmap set.");
+        return;
+      }
+      const artist = String(chosen.artist ?? "");
+      const title = String(chosen.title ?? "");
+      const mapLabel = `${artist} - ${title}`;
+      await importFromSearch(id, { mapLabel });
+    } catch (e) {
+      pushToast("error", String(e));
+    } finally {
+      setCurating(false);
     }
   };
 
@@ -440,6 +509,7 @@ export function useSearchDownloadState(deps: SearchDownloadDeps) {
     curateError,
     runCurateDiscover,
     runCurateNewRanked,
+    downloadRandomCurateDiscover,
     activeCollection,
     activeItems,
     addToCollection,

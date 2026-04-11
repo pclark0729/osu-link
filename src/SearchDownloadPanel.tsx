@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import { BeatmapResultCard } from "./BeatmapResultCard";
 import { NeuSelect } from "./NeuSelect";
 import {
@@ -15,9 +23,14 @@ import { useBeatmapAvgPp } from "./useBeatmapAvgPp";
 export function SearchDownloadPanel({
   s,
   onInspectSet,
+  heroQueryRef,
+  searchFocusNonce = 0,
 }: {
   s: SearchDownloadState;
   onInspectSet?: (raw: unknown) => void;
+  heroQueryRef?: RefObject<HTMLInputElement | null>;
+  /** Increment from a global hotkey to move focus into the query field after the Search tab is shown. */
+  searchFocusNonce?: number;
 }) {
   const {
     query,
@@ -86,6 +99,11 @@ export function SearchDownloadPanel({
   const [presetSaveName, setPresetSaveName] = useState("");
   const [presetRenameValue, setPresetRenameValue] = useState("");
   const presetImportRef = useRef<HTMLInputElement>(null);
+
+  useLayoutEffect(() => {
+    if (searchFocusNonce <= 0) return;
+    heroQueryRef?.current?.focus();
+  }, [searchFocusNonce, heroQueryRef]);
 
   useEffect(() => {
     const p = presets.find((x) => x.id === presetPickerValue);
@@ -293,6 +311,7 @@ export function SearchDownloadPanel({
           <label className="field search-hero-query">
             <span>Query</span>
             <input
+              ref={heroQueryRef}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
