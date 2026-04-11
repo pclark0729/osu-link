@@ -1,6 +1,15 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { type ChangeEvent, type UIEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type UIEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   buildSharedPayload,
   parseImportedCollectionJson,
@@ -227,6 +236,56 @@ function viewSubtitle(tab: AppTab, partyState: PartyClientState): string {
   return base;
 }
 
+type DesktopIntroPhase = "idle" | "tv" | "eject" | "done";
+
+const DESKTOP_INTRO_TV_MS = 820;
+const DESKTOP_INTRO_EJECT_MS = 520;
+
+function initialDesktopIntroPhase(): DesktopIntroPhase {
+  if (!isTauri()) return "done";
+  if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return "done";
+  }
+  return "idle";
+}
+
+const TauriTitleBarChrome = memo(function TauriTitleBarChrome({
+  titleBarEjected,
+  peek,
+  onPeekEnter,
+  onPeekLeave,
+}: {
+  titleBarEjected: boolean;
+  peek: boolean;
+  onPeekEnter: () => void;
+  onPeekLeave: () => void;
+}) {
+  return (
+    <div className="title-bar-chrome-root" onMouseLeave={titleBarEjected ? onPeekLeave : undefined}>
+      {titleBarEjected && (
+        <div
+          className="title-bar-hover-strip"
+          data-tauri-drag-region
+          onMouseEnter={onPeekEnter}
+          aria-hidden
+        />
+      )}
+      <div
+        className={`title-bar-slot ${titleBarEjected && !peek ? "title-bar-slot--ejected" : ""}`}
+        onMouseEnter={titleBarEjected ? onPeekEnter : undefined}
+      >
+        <div className="title-bar-slot-inner">
+          <TitleBar />
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const CrtStartupOverlay = memo(function CrtStartupOverlay() {
+  return <div className="crt-startup-overlay" aria-hidden />;
+});
+
 function ViewContextHeader({
   tab,
   authLabel,
@@ -261,6 +320,9 @@ export default function App() {
   const [startupUpdateVersion, setStartupUpdateVersion] = useState<string | null>(null);
   const [startupUpdateBusy, setStartupUpdateBusy] = useState(false);
   const [bootReady, setBootReady] = useState(false);
+  const [desktopIntroPhase, setDesktopIntroPhase] = useState<DesktopIntroPhase>(initialDesktopIntroPhase);
+  const [titleBarPeek, setTitleBarPeek] = useState(false);
+  const titleBarPeekTimerRef = useRef<number | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [tab, setTab] = useState<AppTab>("search");
@@ -523,6 +585,72 @@ export default function App() {
       setBootReady(true);
     })();
   }, [refreshAuth, refreshPaths]);
+
+  useLayoutEffect(() => {
+    if (!isTauri() || desktopIntroPhase !== "idle" || !bootReady) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setDesktopIntroPhase("done");
+      return;
+    }
+    setDesktopIntroPhase("tv");
+  }, [bootReady, desktopIntroPhase]);
+
+  useEffect(() => {
+    if (desktopIntroPhase !== "tv") return;
+    const t = window.setTimeout(() => setDesktopIntroPhase("eject"), DESKTOP_INTRO_TV_MS);
+    return () => clearTimeout(t);
+  }, [desktopIntroPhase]);
+
+  useEffect(() => {
+    if (desktopIntroPhase !== "eject") return;
+    const t = window.setTimeout(() => setDesktopIntroPhase("done"), DESKTOP_INTRO_EJECT_MS);
+    return () => clearTimeout(t);
+  }, [desktopIntroPhase]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const ejected = desktopIntroPhase === "eject" || desktopIntroPhase === "done";
+    const hidden = ejected && !titleBarPeek;
+    document.documentElement.toggleAttribute("data-title-bar-ejected", hidden);
+    return () => document.documentElement.removeAttribute("data-title-bar-ejected");
+  }, [desktopIntroPhase, titleBarPeek]);
+
+  const scheduleTitleBarPeekEnd = useCallback(() => {
+    if (titleBarPeekTimerRef.current != null) window.clearTimeout(titleBarPeekTimerRef.current);
+    titleBarPeekTimerRef.current = window.setTimeout(() => {
+      titleBarPeekTimerRef.current = null;
+      setTitleBarPeek(false);
+    }, 240);
+  }, []);
+
+  const cancelTitleBarPeekEnd = useCallback(() => {
+    if (titleBarPeekTimerRef.current != null) {
+      window.clearTimeout(titleBarPeekTimerRef.current);
+      titleBarPeekTimerRef.current = null;
+    }
+  }, []);
+
+  const onTitleBarPeekEnter = useCallback(() => {
+    cancelTitleBarPeekEnd();
+    setTitleBarPeek(true);
+  }, [cancelTitleBarPeekEnd]);
+
+  const onTitleBarPeekLeave = useCallback(() => {
+    const ejected = isTauri() && (desktopIntroPhase === "eject" || desktopIntroPhase === "done");
+    if (!ejected) return;
+    scheduleTitleBarPeekEnd();
+  }, [desktopIntroPhase, scheduleTitleBarPeekEnd]);
+
+  useEffect(() => {
+    const ejected = isTauri() && (desktopIntroPhase === "eject" || desktopIntroPhase === "done");
+    if (!ejected) setTitleBarPeek(false);
+  }, [desktopIntroPhase]);
+
+  useEffect(() => {
+    return () => {
+      if (titleBarPeekTimerRef.current != null) window.clearTimeout(titleBarPeekTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!bootReady || !settings.onboardingCompleted || !updaterAvailable()) return;
@@ -967,6 +1095,10 @@ export default function App() {
 
   const totalMapsInLibrary = collectionStore.collections.reduce((acc, c) => acc + c.items.length, 0);
 
+  const desktopShellClass = "app-desktop";
+  const showCrtOverlay = isTauri() && desktopIntroPhase === "tv";
+  const titleBarEjected = isTauri() && (desktopIntroPhase === "eject" || desktopIntroPhase === "done");
+
   if (!bootReady) {
     const boot = (
       <div className="app-boot">
@@ -977,9 +1109,15 @@ export default function App() {
       </div>
     );
     return isTauri() ? (
-      <div className="app-desktop">
+      <div className={desktopShellClass}>
+        {showCrtOverlay && <CrtStartupOverlay />}
         <JapaneseTextBackdrop />
-        <TitleBar />
+        <TauriTitleBarChrome
+          titleBarEjected={titleBarEjected}
+          peek={titleBarPeek}
+          onPeekEnter={onTitleBarPeekEnter}
+          onPeekLeave={onTitleBarPeekLeave}
+        />
         {boot}
       </div>
     ) : (
@@ -1001,9 +1139,15 @@ export default function App() {
       />
     );
     return isTauri() ? (
-      <div className="app-desktop">
+      <div className={desktopShellClass}>
+        {showCrtOverlay && <CrtStartupOverlay />}
         <JapaneseTextBackdrop />
-        <TitleBar />
+        <TauriTitleBarChrome
+          titleBarEjected={titleBarEjected}
+          peek={titleBarPeek}
+          onPeekEnter={onTitleBarPeekEnter}
+          onPeekLeave={onTitleBarPeekLeave}
+        />
         {onboarding}
       </div>
     ) : (
@@ -1447,11 +1591,17 @@ export default function App() {
   );
 
   return isTauri() ? (
-    <div className="app-desktop">
+    <div className={desktopShellClass}>
+      {showCrtOverlay && <CrtStartupOverlay />}
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      <TitleBar />
+      <TauriTitleBarChrome
+        titleBarEjected={titleBarEjected}
+        peek={titleBarPeek}
+        onPeekEnter={onTitleBarPeekEnter}
+        onPeekLeave={onTitleBarPeekLeave}
+      />
       {main}
       {showScrollTop && (
         <button

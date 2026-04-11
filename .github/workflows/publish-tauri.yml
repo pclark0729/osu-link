@@ -45,7 +45,10 @@ jobs:
         with:
           node-version: lts/*
 
-      - name: Sync app version from release tag
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Sync app version from release tag (see scripts/resolve-and-sync-version.mjs)
         shell: bash
         run: |
           set -euo pipefail
@@ -55,9 +58,8 @@ jobs:
             echo "Tag must be vX.Y.Z (got $TAG)"
             exit 1
           fi
-          echo "Building version $VERSION from tag $TAG"
-          npm version "$VERSION" --no-git-tag-version
-          node scripts/sync-tauri-version.mjs "$VERSION"
+          export RELEASE_VERSION="$VERSION"
+          node scripts/resolve-and-sync-version.mjs
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -69,8 +71,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - run: npm ci
 
       - uses: tauri-apps/tauri-action@v0
         env:

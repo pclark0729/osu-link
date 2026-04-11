@@ -1,14 +1,14 @@
 {
   "name": "osu-link",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.3-dev.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:installer": "node scripts/tauri-build-with-signing.mjs",
+    "build:installer": "node scripts/resolve-and-sync-version.mjs && node scripts/tauri-build-with-signing.mjs",
     "party-server": "npm start --prefix party-server",
     "test": "vitest run"
   },

@@ -188,6 +188,13 @@ html.tauri[data-window-maximized="true"] {
   --titlebar-float-gap-bottom: 0px;
 }
 
+/* Title bar tucked away after startup — onboarding overlay aligns to window top */
+html.tauri[data-title-bar-ejected="true"] {
+  --titlebar-stack-height: 0px;
+  --titlebar-float-inset-top: 0px;
+  --titlebar-float-gap-bottom: 0px;
+}
+
 /* Flush to the native window — no transparent gutter that reads as a “clear border” */
 html.tauri:not([data-window-maximized="true"]) {
   --window-chrome-margin: 0px;
@@ -365,6 +372,20 @@ html.tauri .app-boot {
   .app-boot {
     background: var(--neu-canvas) !important;
   }
+
+  .crt-startup-overlay,
+  .crt-startup-overlay::before,
+  .crt-startup-overlay::after {
+    animation: none !important;
+  }
+
+  .crt-startup-overlay {
+    opacity: 0 !important;
+  }
+
+  .title-bar-slot {
+    transition: none !important;
+  }
 }
 
 /*
@@ -389,9 +410,114 @@ html.tauri .app-boot {
   height: calc(100vh - var(--titlebar-stack-height));
 }
 
-.title-bar {
+/*
+ * Desktop intro: CRT-style overlay — clip-path + opacity only (no filter/backdrop on the
+ * full window; those force expensive repaints every frame). Single composited layer + pseudo-elements.
+ */
+.crt-startup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  pointer-events: none;
+  contain: strict;
+  isolation: isolate;
+  transform: translateZ(0);
+  background: #000;
+  animation: crt-overlay-fade-out 0.12s ease-out 0.68s forwards;
+}
+
+.crt-startup-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--neu-canvas);
+  will-change: clip-path, opacity;
+  animation: crt-beam-open 0.72s cubic-bezier(0.18, 0.92, 0.18, 1) forwards;
+}
+
+.crt-startup-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    transparent 0 2px,
+    rgba(0, 0, 0, 0.18) 2px 4px
+  );
+  opacity: 0.4;
+  will-change: opacity;
+  animation: crt-scan-dissolve 0.72s ease-out forwards;
+}
+
+@keyframes crt-beam-open {
+  0% {
+    clip-path: inset(48% 0 48% 0);
+    opacity: 0.35;
+  }
+  42% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+
+@keyframes crt-scan-dissolve {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes crt-overlay-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+.title-bar-chrome-root {
   position: relative;
   z-index: 10;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.title-bar-hover-strip {
+  flex-shrink: 0;
+  height: 12px;
+  width: 100%;
+  background: transparent;
+}
+
+.title-bar-slot {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-rows: 1fr;
+  min-height: 0;
+  overflow: hidden;
+  transition:
+    grid-template-rows 0.45s cubic-bezier(0.33, 1, 0.68, 1),
+    opacity 0.28s ease;
+}
+
+.title-bar-slot-inner {
+  min-height: 0;
+}
+
+.title-bar-slot--ejected {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.title-bar-slot--ejected .title-bar {
+  margin: 0 !important;
+}
+
+.title-bar {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
   height: var(--titlebar-height);
   min-height: var(--titlebar-height);

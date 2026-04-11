@@ -17,8 +17,10 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const tauriPath = path.join(root, "src-tauri", "tauri.conf.json");
 const tauri = JSON.parse(fs.readFileSync(tauriPath, "utf8"));
-tauri.version = version;
-fs.writeFileSync(tauriPath, JSON.stringify(tauri, null, 2) + "\n");
+if (tauri.version !== version) {
+  tauri.version = version;
+  fs.writeFileSync(tauriPath, JSON.stringify(tauri, null, 2) + "\n");
+}
 
 const cargoPath = path.join(root, "src-tauri", "Cargo.toml");
 let cargo = fs.readFileSync(cargoPath, "utf8").replace(/\r\n/g, "\n");
@@ -27,9 +29,15 @@ const updated = cargo.replace(
   `$1${version}$2`
 );
 if (updated === cargo) {
-  console.error("Could not find [package] version = \"...\" in Cargo.toml");
-  process.exit(1);
+  const m = cargo.match(/\[package\][\s\S]*?^version = "([^"]+)"/m);
+  if (m?.[1] === version) {
+    console.log(`Cargo.toml already at ${version}`);
+  } else {
+    console.error('Could not find [package] version = "..." in Cargo.toml');
+    process.exit(1);
+  }
+} else {
+  fs.writeFileSync(cargoPath, updated);
 }
-fs.writeFileSync(cargoPath, updated);
 
 console.log(`Synced Tauri/Cargo version to ${version}`);
