@@ -1,6 +1,6 @@
 [package]
 name = "osu-link"
-version = "1.0.3-dev.1"
+version = "1.0.3-2"
 description = "osu!stable beatmap downloader and importer"
 authors = ["you"]
 edition = "2021"

@@ -2526,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "osu-link"
-version = "1.0.3-dev.1"
+version = "1.0.3-2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

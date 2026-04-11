@@ -5,8 +5,9 @@
  * Priority:
  *   1. RELEASE_VERSION or TAURI_BUILD_VERSION (explicit)
  *   2. GITHUB_REF=refs/tags/vX.Y.Z on tag builds
- *   3. Latest v* tag at HEAD: exact X.Y.Z if on tag; else X.Y.Z-dev.N (N = commits after tag)
- *   4. No tags: 0.1.0-dev.N (N = total commits)
+ *   3. Latest v* tag at HEAD: exact X.Y.Z if on tag; else X.Y.Z-N (N = commits after tag; numeric
+ *      prerelease only — required for WiX/MSI, which rejects identifiers like "dev.N")
+ *   4. No tags: 0.1.0-N (N = total commits)
  *
  * Skip with TAURI_SKIP_VERSION_SYNC=1 (e.g. local builds when you want a clean tree).
  */
@@ -48,13 +49,13 @@ function resolveVersion() {
     const tag = git('describe --tags --abbrev=0 --match "v*"');
     const base = tag.replace(/^v/, "");
     const since = parseInt(git(`rev-list ${tag}..HEAD --count`), 10);
-    if (Number.isNaN(since)) return `${base}-dev.1`;
+    if (Number.isNaN(since)) return `${base}-1`;
     if (since === 0) return base;
-    return `${base}-dev.${since}`;
+    return `${base}-${since}`;
   } catch {
     try {
       const n = parseInt(git("rev-list --count HEAD"), 10) || 0;
-      return `0.1.0-dev.${n}`;
+      return `0.1.0-${n}`;
     } catch {
       return "0.1.0";
     }
