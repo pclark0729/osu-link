@@ -1,8 +1,14 @@
+mod beatmap_avg_pp;
 mod collections;
 mod import;
 mod local_library;
 mod oauth;
 mod osu_api;
+mod osu_process;
+#[cfg(target_os = "windows")]
+mod osu_overlay_win;
+#[cfg(target_os = "windows")]
+mod overlay_hotkeys_win;
 mod paths;
 mod settings;
 
@@ -10,6 +16,7 @@ use collections::{load_collection_store, save_collection_store, CollectionStore}
 use serde::Serialize;
 use serde_json::Value;
 use settings::{load_settings, resolve_social_api_base, save_settings, Settings};
+use tauri::Manager;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +103,26 @@ async fn search_beatmapsets(input: osu_api::SearchInput) -> Result<Value, String
     )
     .await?;
     osu_api::api_search(&token, &input).await
+}
+
+/// Average PP from global leaderboard scores (`GET /beatmaps/{id}/scores`, mean of `pp` on returned scores).
+#[tauri::command]
+async fn get_beatmap_avg_pp(
+    beatmap_ids: Vec<i64>,
+    ruleset: String,
+) -> Result<std::collections::HashMap<i64, Option<f64>>, String> {
+    let s = load_settings();
+    if s.client_id.is_empty() || s.client_secret.is_empty() {
+        return Err("Configure OAuth Client ID and Secret.".into());
+    }
+    let mut bundle = oauth::load_tokens()?.ok_or_else(|| "Sign in with osu! first.".to_string())?;
+    let token = oauth::ensure_fresh_access_token(
+        s.client_id.trim(),
+        s.client_secret.trim(),
+        &mut bundle,
+    )
+    .await?;
+    Ok(beatmap_avg_pp::get_avg_pp_batch(&token, &beatmap_ids, &ruleset).await)
 }
 
 #[tauri::command]
@@ -324,12 +351,102 @@ async fn osu_user_recent_scores(user_id: i64, limit: Option<u32>, mode: Option<S
     osu_api::api_user_recent_scores(&token, user_id, lim, m).await
 }
 
+/// Show the overlay on top of osu! **without stealing keyboard focus** (so osu!'s "minimize when not focused" does not trigger).
+#[tauri::command]
+fn overlay_show_inactive(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    let _ = win.set_always_on_top(true);
+    #[cfg(target_os = "windows")]
+    {
+        let hwnd = win.hwnd().map_err(|e| e.to_string())?;
+        let pids = osu_process::osu_stable_pids();
+        osu_overlay_win::show_overlay_without_activation(hwnd, &pids);
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        win.show().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Show the overlay (if needed), keep it above osu!, and move keyboard focus into it (for search / downloads).
+#[tauri::command]
+fn overlay_focus(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("overlay") else {
+        return Ok(());
+    };
+    win.show().map_err(|e| e.to_string())?;
+    let _ = win.set_always_on_top(true);
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(main) = app.get_webview_window("main") {
+            if let Ok(main_hwnd) = main.hwnd() {
+                osu_overlay_win::show_window_no_activate(main_hwnd);
+            }
+        }
+        let hwnd = win.hwnd().map_err(|e| e.to_string())?;
+        let pids = osu_process::osu_stable_pids();
+        osu_overlay_win::stack_overlay_above_osu(hwnd, &pids);
+    }
+    win.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Which backend handles overlay global shortcuts: `ll-hook` (Windows, low-level hook) or `plugin` (Tauri RegisterHotKey).
+#[tauri::command]
+fn overlay_hotkeys_backend() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "ll-hook"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "plugin"
+    }
+}
+
+/// Reload low-level overlay hotkeys from disk (Windows). No-op elsewhere.
+#[tauri::command]
+fn reload_overlay_hotkeys(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        overlay_hotkeys_win::reload(&app);
+    }
+    Ok(())
+}
+
+/// Re-apply always-on-top + Win32 `HWND_TOPMOST` so the overlay stacks above osu! (borderless/windowed).
+#[tauri::command]
+fn overlay_pin_topmost(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let Some(win) = app.get_webview_window("overlay") else {
+            return Ok(());
+        };
+        let _ = win.set_always_on_top(true);
+        let hwnd = win.hwnd().map_err(|e| e.to_string())?;
+        let pids = osu_process::osu_stable_pids();
+        osu_overlay_win::stack_overlay_above_osu(hwnd, &pids);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            #[cfg(target_os = "windows")]
+            {
+                overlay_hotkeys_win::start(&app.handle());
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings_cmd,
@@ -337,6 +454,7 @@ pub fn run() {
             oauth_logout,
             auth_status,
             search_beatmapsets,
+            get_beatmap_avg_pp,
             get_beatmap_dir,
             preview_beatmap_dir,
             get_local_beatmapset_ids,
@@ -350,6 +468,13 @@ pub fn run() {
             osu_user_profile,
             osu_user_ruleset_stats,
             osu_user_recent_scores,
+            osu_process::is_osu_running,
+            osu_process::is_osu_overlay_eligible,
+            overlay_show_inactive,
+            overlay_focus,
+            overlay_pin_topmost,
+            overlay_hotkeys_backend,
+            reload_overlay_hotkeys,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,12 +8,13 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "build:installer": "tauri build",
+    "build:installer": "node scripts/tauri-build-with-signing.mjs",
     "party-server": "npm start --prefix party-server"
   },
   "dependencies": {
     "@fontsource/plus-jakarta-sans": "^5.2.8",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-global-shortcut": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2",

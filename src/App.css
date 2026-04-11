@@ -503,6 +503,22 @@ label.field span {
   font-weight: 500;
 }
 
+label.field--checkbox {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+label.field--checkbox input[type="checkbox"] {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+}
+
+label.field--checkbox span {
+  font-weight: 500;
+  color: var(--text);
+}
+
 /* HTML default type is text, but `input[type="text"]` does not match a bare `input` — include :not([type]). */
 input:not([type]),
 input[type="text"],
@@ -885,6 +901,13 @@ button.danger:disabled {
   font-size: 0.8rem;
   color: var(--muted);
   margin-top: 0.15rem;
+}
+
+.result-meta-pp-cap {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 0.2rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .result-actions {
@@ -2739,4 +2762,75 @@ button.small-btn {
     border-color: var(--border);
     border-top-color: var(--accent);
   }
+}
+
+/* Overlay window (second WebviewWindow, label "overlay") — parent window uses transparent: true */
+html.overlay-html,
+html.overlay-html body {
+  background: transparent !important;
+}
+
+.overlay-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: rgba(20, 20, 28, 0.88);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.overlay-root--boot {
+  align-items: center;
+  justify-content: center;
+}
+
+.overlay-chrome {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--titlebar-height);
+  padding: 0 0.75rem 0 1rem;
+  background: rgba(24, 24, 34, 0.92);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.overlay-chrome-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.overlay-chrome-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overlay-chrome-close:hover {
+  background: var(--surface-hover);
+}
+
+.overlay-hint {
+  margin: 0;
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: rgba(230, 200, 110, 0.08);
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.overlay-main {
+  flex: 1;
+  padding: 0.75rem 1rem 1.25rem;
+}
+
+.overlay-search-panel {
+  margin-bottom: 0.75rem;
 }

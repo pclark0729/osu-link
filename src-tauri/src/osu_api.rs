@@ -97,6 +97,59 @@ pub async fn api_search(access_token: &str, input: &SearchInput) -> Result<Value
     res.json().await.map_err(|e| e.to_string())
 }
 
+/// Global leaderboard scores for a beatmap (`GET /api/v2/beatmaps/{id}/scores`).
+pub async fn api_beatmap_scores(
+    access_token: &str,
+    beatmap_id: i64,
+    ruleset: &str,
+    limit: u32,
+) -> Result<Value, String> {
+    let lim = limit.min(100).max(1);
+    let url = format!("{API}/beatmaps/{beatmap_id}/scores");
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .query(&[
+            ("limit", lim.to_string()),
+            ("legacy_only", "0".to_string()),
+            ("mode", ruleset.to_string()),
+        ])
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = res.status();
+    if !status.is_success() {
+        let t = res.text().await.unwrap_or_default();
+        return Err(format!("beatmap scores HTTP {status}: {t}"));
+    }
+    res.json().await.map_err(|e| e.to_string())
+}
+
+/// Mean `pp` among returned scores (approximates “average PP people get when this is a top play”).
+pub fn avg_pp_from_scores_json(value: &Value) -> Option<f64> {
+    let scores = value.get("scores")?.as_array()?;
+    if scores.is_empty() {
+        return None;
+    }
+    let mut sum = 0.0_f64;
+    let mut n = 0usize;
+    for s in scores {
+        if let Some(pp) = s.get("pp").and_then(|x| x.as_f64()) {
+            if pp.is_finite() && pp >= 0.0 {
+                sum += pp;
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        None
+    } else {
+        Some(sum / n as f64)
+    }
+}
+
 pub async fn api_me(access_token: &str) -> Result<Value, String> {
     let client = reqwest::Client::new();
     let res = client

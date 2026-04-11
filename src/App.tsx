@@ -1,64 +1,39 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   buildSharedPayload,
   parseImportedCollectionJson,
   serializeSharedCollection,
 } from "./collectionShare";
 import {
+  DEFAULT_OVERLAY_FOCUS_HOTKEY,
+  DEFAULT_OVERLAY_HOTKEY,
   DEFAULT_PARTY_WS_URL,
   PARTY_SERVER_URL_UI_HIDDEN,
   PUBLIC_PARTY_WS_URL,
   defaultPartyWsUrlFromSettings,
 } from "./constants";
+import {
+  getActiveCollection,
+  mapActiveItems,
+  type BeatmapCollection,
+  type CollectionItem,
+  type CollectionStore,
+} from "./models";
 import { OnboardingFlow } from "./OnboardingFlow";
 import { buildPartyConnectUrlCandidates } from "./party/partyConnectUrls";
 import { PartyClient, type PartyClientState } from "./party/partyClient";
 import { parseLobbyCodeFromText } from "./party/parseLobbyCode";
 import { PartyPanel } from "./PartyPanel";
-import { NeuSelect } from "./NeuSelect";
+import { SearchDownloadPanel } from "./SearchDownloadPanel";
 import { SocialPanel } from "./SocialPanel";
 import { TitleBar } from "./TitleBar";
+import { useOsuOverlay } from "./useOsuOverlay";
+import { useSearchDownloadState } from "./useSearchDownloadState";
 import packageJson from "../package.json";
-import { checkForUpdatesAndInstall, runAutoUpdate, updaterAvailable } from "./autoUpdate";
+import { checkForUpdatesAndInstall, updaterAvailable } from "./autoUpdate";
 import "./App.css";
-
-type Mode = "osu" | "taiko" | "fruits" | "mania";
-
-const MODE_API: Record<Mode, number> = {
-  osu: 0,
-  taiko: 1,
-  fruits: 2,
-  mania: 3,
-};
-
-const SEARCH_MODE_OPTIONS = [
-  { value: "osu", label: "osu!" },
-  { value: "taiko", label: "Taiko" },
-  { value: "fruits", label: "Catch" },
-  { value: "mania", label: "Mania" },
-] as const;
-
-const SEARCH_SECTION_OPTIONS = [
-  { value: "ranked", label: "Ranked" },
-  { value: "qualified", label: "Qualified" },
-  { value: "loved", label: "Loved" },
-  { value: "pending", label: "Pending" },
-  { value: "graveyard", label: "Graveyard" },
-] as const;
-
-const SEARCH_SORT_OPTIONS = [
-  { value: "plays_desc", label: "Play count (high → low)" },
-  { value: "favourites_desc", label: "Favourites" },
-  { value: "ranked_desc", label: "Recently ranked" },
-  { value: "rating_desc", label: "User rating" },
-  { value: "title_asc", label: "Title A–Z" },
-] as const;
-
-/** Max API pages to walk when building curated lists; avoids unbounded requests. */
-const CURATE_PAGE_CAP = 8;
-const CURATE_PICK_COUNT = 8;
 
 interface Settings {
   clientId: string;
@@ -67,86 +42,12 @@ interface Settings {
   onboardingCompleted: boolean;
   partyServerUrl: string | null;
   socialApiBaseUrl: string | null;
-}
-
-interface CollectionItem {
-  id: string;
-  beatmapsetId: number;
-  artist: string;
-  title: string;
-  creator: string;
-  coverUrl?: string | null;
-  status: string;
-  error?: string | null;
-}
-
-interface BeatmapCollection {
-  id: string;
-  name: string;
-  items: CollectionItem[];
-}
-
-interface CollectionStore {
-  activeCollectionId: string | null;
-  collections: BeatmapCollection[];
-}
-
-function getActiveCollection(store: CollectionStore): BeatmapCollection | undefined {
-  if (store.collections.length === 0) return undefined;
-  const id = store.activeCollectionId;
-  return store.collections.find((c) => c.id === id) ?? store.collections[0];
-}
-
-function mapActiveItems(
-  store: CollectionStore,
-  fn: (items: CollectionItem[]) => CollectionItem[],
-): CollectionStore {
-  const active = getActiveCollection(store);
-  if (!active) return store;
-  const aid = active.id;
-  return {
-    ...store,
-    activeCollectionId: store.activeCollectionId ?? aid,
-    collections: store.collections.map((c) => (c.id === aid ? { ...c, items: fn(c.items) } : c)),
-  };
-}
-
-interface SearchInput {
-  q?: string | null;
-  m?: number | null;
-  s?: string | null;
-  sort?: string | null;
-  cursor_string?: string | null;
-  g?: number | null;
-  l?: number | null;
-  e?: string | null;
-  c?: string | null;
-  r?: string | null;
-  nsfw?: boolean | null;
-}
-
-function filterSetsByModeAndStars(
-  sets: unknown[],
-  mode: Mode,
-  minStars: string,
-  maxStars: string,
-): unknown[] {
-  const min = minStars.trim() === "" ? undefined : Number(minStars);
-  const max = maxStars.trim() === "" ? undefined : Number(maxStars);
-  return sets.filter((raw) => {
-    const set = raw as Record<string, unknown>;
-    const avail = set.availability as Record<string, unknown> | undefined;
-    if (avail?.download_disabled === true) return false;
-    const beatmaps = (set.beatmaps as Record<string, unknown>[]) || [];
-    const ok = beatmaps.some((b) => {
-      if (b.mode !== mode) return false;
-      const stars = Number(b.difficulty_rating ?? 0);
-      if (min !== undefined && !Number.isNaN(min) && stars < min) return false;
-      if (max !== undefined && !Number.isNaN(max) && stars > max) return false;
-      return true;
-    });
-    return ok;
-  });
+  /** Normalized shortcut string (never empty in UI). */
+  overlayHotkey: string;
+  /** Focus overlay for typing (never empty in UI). */
+  overlayFocusHotkey: string;
+  /** In-game overlay window and global shortcuts. */
+  overlayEnabled: boolean;
 }
 
 function randomId(): string {
@@ -270,45 +171,25 @@ export default function App() {
     onboardingCompleted: false,
     partyServerUrl: null,
     socialApiBaseUrl: null,
+    overlayHotkey: DEFAULT_OVERLAY_HOTKEY,
+    overlayFocusHotkey: DEFAULT_OVERLAY_FOCUS_HOTKEY,
+    overlayEnabled: true,
   });
   const [resolvedSongs, setResolvedSongs] = useState<string>("");
   const [authLabel, setAuthLabel] = useState<string>("Signed out");
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<Mode>("osu");
-  const [section, setSection] = useState("ranked");
-  const [sort, setSort] = useState("plays_desc");
-  const [minStars, setMinStars] = useState("");
-  const [maxStars, setMaxStars] = useState("");
   const [noVideo, setNoVideo] = useState(true);
-  const [genre, setGenre] = useState("");
-  const [language, setLanguage] = useState("");
-  const [extras, setExtras] = useState("");
-  const [general, setGeneral] = useState("");
-  const [ranks, setRanks] = useState("");
-  const [nsfw, setNsfw] = useState(false);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [rawResults, setRawResults] = useState<unknown[]>([]);
-  const [cursorString, setCursorString] = useState<string | null>(null);
-  const [total, setTotal] = useState<number | null>(null);
   const [collectionStore, setCollectionStore] = useState<CollectionStore>({
     activeCollectionId: null,
     collections: [],
   });
   const storeRef = useRef<CollectionStore>(collectionStore);
   const [importBusy, setImportBusy] = useState(false);
-  const [directImportSetId, setDirectImportSetId] = useState<number | null>(null);
   const [collectionNameDraft, setCollectionNameDraft] = useState("");
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState<string>("—");
   const [updateBusy, setUpdateBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
-  const [searchAttempted, setSearchAttempted] = useState(false);
   const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
-  const [hideOwnedSearch, setHideOwnedSearch] = useState(false);
-  const [curateResults, setCurateResults] = useState<unknown[]>([]);
-  const [curating, setCurating] = useState(false);
-  const [curateError, setCurateError] = useState<string | null>(null);
   const localLibraryRef = useRef<Set<number>>(new Set());
   const importFileRef = useRef<HTMLInputElement>(null);
   const [partyState, setPartyState] = useState<PartyClientState>(() =>
@@ -386,10 +267,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void runAutoUpdate();
-  }, []);
-
-  useEffect(() => {
     const client = new PartyClient(defaultPartyWsUrlFromSettings(undefined), (ev) => {
       if (ev.kind === "state") setPartyState(ev.state);
       if (ev.kind === "beatmap_queued") {
@@ -434,16 +311,6 @@ export default function App() {
   const activeCollection = getActiveCollection(collectionStore);
   const activeItems = activeCollection?.items ?? [];
 
-  const searchDisplayResults = useMemo(() => {
-    if (!hideOwnedSearch) return rawResults;
-    return rawResults.filter((raw) => {
-      const set = raw as Record<string, unknown>;
-      const sid = Number(set.id);
-      if (!Number.isFinite(sid)) return true;
-      return !localBeatmapsetIds.has(sid);
-    });
-  }, [rawResults, hideOwnedSearch, localBeatmapsetIds]);
-
   useEffect(() => {
     setCollectionNameDraft(activeCollection?.name ?? "");
   }, [activeCollection?.id, activeCollection?.name]);
@@ -485,6 +352,9 @@ export default function App() {
         onboardingCompleted: s.onboardingCompleted !== false,
         partyServerUrl: s.partyServerUrl ?? null,
         socialApiBaseUrl: s.socialApiBaseUrl ?? null,
+        overlayHotkey: (s as Settings).overlayHotkey?.trim() || DEFAULT_OVERLAY_HOTKEY,
+        overlayFocusHotkey: (s as Settings).overlayFocusHotkey?.trim() || DEFAULT_OVERLAY_FOCUS_HOTKEY,
+        overlayEnabled: (s as Settings).overlayEnabled !== false,
       });
     } catch {
       setSettings((prev) => ({ ...prev, onboardingCompleted: true }));
@@ -504,6 +374,9 @@ export default function App() {
           onboardingCompleted: s.onboardingCompleted !== false,
           partyServerUrl: s.partyServerUrl ?? null,
           socialApiBaseUrl: s.socialApiBaseUrl ?? null,
+          overlayHotkey: (s as Settings).overlayHotkey?.trim() || DEFAULT_OVERLAY_HOTKEY,
+          overlayFocusHotkey: (s as Settings).overlayFocusHotkey?.trim() || DEFAULT_OVERLAY_FOCUS_HOTKEY,
+          overlayEnabled: (s as Settings).overlayEnabled !== false,
         });
         const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
         partyClientRef.current?.setUrl(urls[0]);
@@ -557,6 +430,11 @@ export default function App() {
             settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
               ? settings.socialApiBaseUrl.trim()
               : null,
+          overlayHotkey:
+            settings.overlayHotkey.trim() !== "" ? settings.overlayHotkey.trim() : null,
+          overlayFocusHotkey:
+            settings.overlayFocusHotkey.trim() !== "" ? settings.overlayFocusHotkey.trim() : null,
+          overlayEnabled: settings.overlayEnabled,
         },
       });
       setSettings((prev) => ({ ...prev, onboardingCompleted: false }));
@@ -615,188 +493,6 @@ export default function App() {
     void persistStore(next);
   };
 
-  const runSearch = async (append: boolean) => {
-    setSearchError(null);
-    setSearchAttempted(true);
-    setSearching(true);
-    try {
-      const input: SearchInput = {
-        q: query.trim() || null,
-        m: MODE_API[mode],
-        s: section,
-        sort,
-        cursor_string: append && cursorString ? cursorString : null,
-        g:
-          genre.trim() === ""
-            ? null
-            : Number.isFinite(Number(genre))
-              ? Number(genre)
-              : null,
-        l:
-          language.trim() === ""
-            ? null
-            : Number.isFinite(Number(language))
-              ? Number(language)
-              : null,
-        e: extras.trim() || null,
-        c: general.trim() || null,
-        r: ranks.trim() || null,
-        nsfw: nsfw || null,
-      };
-      const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
-      const sets = (res.beatmapsets as unknown[]) || [];
-      const filtered = filterSetsByModeAndStars(sets, mode, minStars, maxStars);
-      if (append) {
-        setRawResults((prev) => [...prev, ...filtered]);
-      } else {
-        setRawResults(filtered);
-      }
-      const cur = res.cursor_string as string | undefined | null;
-      setCursorString(cur && cur.length > 0 ? cur : null);
-      const t = res.total;
-      setTotal(typeof t === "number" ? t : null);
-    } catch (e) {
-      setSearchError(String(e));
-    } finally {
-      setSearching(false);
-    }
-  };
-
-  const runCurateDiscover = async () => {
-    setCurateError(null);
-    setCurating(true);
-    setCurateResults([]);
-    try {
-      const pool: unknown[] = [];
-      let cursor: string | null = null;
-      const local = localLibraryRef.current;
-      let pages = 0;
-      while (pages < CURATE_PAGE_CAP) {
-        pages += 1;
-        const input: SearchInput = {
-          q: query.trim() || null,
-          m: MODE_API[mode],
-          s: section,
-          sort,
-          cursor_string: cursor,
-          g:
-            genre.trim() === ""
-              ? null
-              : Number.isFinite(Number(genre))
-                ? Number(genre)
-                : null,
-          l:
-            language.trim() === ""
-              ? null
-              : Number.isFinite(Number(language))
-                ? Number(language)
-                : null,
-          e: extras.trim() || null,
-          c: general.trim() || null,
-          r: ranks.trim() || null,
-          nsfw: nsfw || null,
-        };
-        const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
-        const sets = filterSetsByModeAndStars((res.beatmapsets as unknown[]) || [], mode, minStars, maxStars);
-        for (const s of sets) {
-          const id = Number((s as Record<string, unknown>).id);
-          if (!Number.isFinite(id) || local.has(id)) continue;
-          pool.push(s);
-        }
-        if (pool.length >= CURATE_PICK_COUNT * 3) break;
-        const cur = res.cursor_string as string | undefined | null;
-        cursor = cur && cur.length > 0 ? cur : null;
-        if (!cursor) break;
-      }
-      const arr = [...pool];
-      for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-      }
-      setCurateResults(arr.slice(0, CURATE_PICK_COUNT));
-    } catch (e) {
-      setCurateError(String(e));
-    } finally {
-      setCurating(false);
-    }
-  };
-
-  const runCurateNewRanked = async () => {
-    setCurateError(null);
-    setCurating(true);
-    setCurateResults([]);
-    try {
-      const out: unknown[] = [];
-      let cursor: string | null = null;
-      const local = localLibraryRef.current;
-      let pages = 0;
-      while (pages < CURATE_PAGE_CAP) {
-        pages += 1;
-        const input: SearchInput = {
-          q: query.trim() || null,
-          m: MODE_API[mode],
-          s: "ranked",
-          sort: "ranked_desc",
-          cursor_string: cursor,
-          g:
-            genre.trim() === ""
-              ? null
-              : Number.isFinite(Number(genre))
-                ? Number(genre)
-                : null,
-          l:
-            language.trim() === ""
-              ? null
-              : Number.isFinite(Number(language))
-                ? Number(language)
-                : null,
-          e: extras.trim() || null,
-          c: general.trim() || null,
-          r: ranks.trim() || null,
-          nsfw: nsfw || null,
-        };
-        const res = await invoke<Record<string, unknown>>("search_beatmapsets", { input });
-        const sets = filterSetsByModeAndStars((res.beatmapsets as unknown[]) || [], mode, minStars, maxStars);
-        for (const s of sets) {
-          const id = Number((s as Record<string, unknown>).id);
-          if (!Number.isFinite(id) || local.has(id)) continue;
-          out.push(s);
-          if (out.length >= CURATE_PICK_COUNT) break;
-        }
-        if (out.length >= CURATE_PICK_COUNT) break;
-        const cur = res.cursor_string as string | undefined | null;
-        cursor = cur && cur.length > 0 ? cur : null;
-        if (!cursor) break;
-      }
-      setCurateResults(out.slice(0, CURATE_PICK_COUNT));
-    } catch (e) {
-      setCurateError(String(e));
-    } finally {
-      setCurating(false);
-    }
-  };
-
-  const addToCollection = (set: Record<string, unknown>) => {
-    const id = Number(set.id);
-    if (Number.isNaN(id)) return;
-    const store = storeRef.current;
-    const active = getActiveCollection(store);
-    if (!active) return;
-    if (active.items.some((c) => c.beatmapsetId === id)) return;
-    const covers = set.covers as Record<string, string> | undefined;
-    const item: CollectionItem = {
-      id: randomId(),
-      beatmapsetId: id,
-      artist: String(set.artist ?? ""),
-      title: String(set.title ?? ""),
-      creator: String(set.creator ?? ""),
-      coverUrl: covers?.list ?? covers?.card ?? null,
-      status: "pending",
-      error: null,
-    };
-    void persistStore(mapActiveItems(store, (items) => [...items, item]));
-  };
-
   const partyCanSend = Boolean(
     partyState.selfId &&
       partyState.leaderId === partyState.selfId &&
@@ -832,26 +528,24 @@ export default function App() {
       );
   };
 
-  const importFromSearch = async (beatmapsetId: number) => {
-    setSettingsMsg(null);
-    setDirectImportSetId(beatmapsetId);
-    try {
-      const path = await invoke<string>("download_and_import", {
-        setId: beatmapsetId,
-        noVideo,
-      });
-      const msg = `Imported to: ${path}. Press F5 in osu! if the map does not appear.`;
-      setSettingsMsg(msg);
-      pushToast("success", msg);
-      await refreshPaths();
-    } catch (e) {
-      const msg = String(e);
-      setSettingsMsg(msg);
-      pushToast("error", msg);
-    } finally {
-      setDirectImportSetId(null);
-    }
-  };
+  const searchDl = useSearchDownloadState({
+    pushToast,
+    refreshPaths,
+    setSettingsMsg,
+    collectionStore,
+    persistStore,
+    storeRef,
+    partyCanSend,
+    sendBeatmapToParty,
+    showPartyActions: true,
+    showCollectionActions: true,
+    localBeatmapsetIds,
+    localIdsRef: localLibraryRef,
+    noVideo,
+    setNoVideo,
+  });
+
+  useOsuOverlay(bootReady, settings.overlayEnabled, settings.overlayHotkey, settings.overlayFocusHotkey);
 
   const saveSettings = async () => {
     setSettingsMsg(null);
@@ -875,6 +569,11 @@ export default function App() {
           onboardingCompleted: settings.onboardingCompleted,
           partyServerUrl: partyUrl,
           socialApiBaseUrl: socialUrl,
+          overlayHotkey:
+            settings.overlayHotkey.trim() !== "" ? settings.overlayHotkey.trim() : null,
+          overlayFocusHotkey:
+            settings.overlayFocusHotkey.trim() !== "" ? settings.overlayFocusHotkey.trim() : null,
+          overlayEnabled: settings.overlayEnabled,
         },
       });
       const wsUrl = defaultPartyWsUrlFromSettings(partyUrl);
@@ -882,6 +581,14 @@ export default function App() {
       setPartyState((prev) => ({ ...prev, url: wsUrl }));
       setSettingsMsg("Settings saved.");
       pushToast("success", "Settings saved.");
+      setSettings((prev) => ({
+        ...prev,
+        overlayHotkey: prev.overlayHotkey.trim() || DEFAULT_OVERLAY_HOTKEY,
+        overlayFocusHotkey: prev.overlayFocusHotkey.trim() || DEFAULT_OVERLAY_FOCUS_HOTKEY,
+      }));
+      if (isTauri()) {
+        await invoke("reload_overlay_hotkeys").catch(() => {});
+      }
       await refreshPaths();
     } catch (e) {
       setSettingsMsg(String(e));
@@ -1279,6 +986,59 @@ export default function App() {
                 The updater runs in the packaged desktop app only (not in dev or the browser preview).
               </p>
             )}
+            {isTauri() && (
+              <>
+                <label className="field field--checkbox" style={{ marginBottom: "1rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.overlayEnabled}
+                    onChange={(e) => setSettings({ ...settings, overlayEnabled: e.target.checked })}
+                  />
+                  <span>Enable in-game overlay (search panel over osu!)</span>
+                </label>
+                <p className="hint" style={{ marginBottom: "0.75rem" }}>
+                  In-game overlay: when osu!stable is running, you can open the search panel with the shortcuts below. On
+                  Windows, shortcuts use a low-level keyboard hook (similar to Overwolf) so they still fire while osu!
+                  has focus; other platforms use the standard global shortcut API. Toggle does not steal osu! focus; use
+                  the second shortcut when you need to type in the overlay.
+                </p>
+                <p className="hint" style={{ marginBottom: "0.75rem" }}>
+                  <strong>Fullscreen:</strong> true exclusive fullscreen owns the screen and a normal desktop window
+                  cannot draw on top. Use osu! <strong>borderless</strong> at your display resolution (or windowed).
+                  The overlay refreshes its stacking order several times per second to stay above the game when the OS
+                  allows it.
+                </p>
+                <label className="field" style={{ marginBottom: "1rem" }}>
+                  <span>Overlay toggle shortcut</span>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={DEFAULT_OVERLAY_HOTKEY}
+                    value={settings.overlayHotkey}
+                    disabled={!settings.overlayEnabled}
+                    onChange={(e) => setSettings({ ...settings, overlayHotkey: e.target.value })}
+                  />
+                </label>
+                <label className="field" style={{ marginBottom: "1rem" }}>
+                  <span>Focus overlay shortcut</span>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={DEFAULT_OVERLAY_FOCUS_HOTKEY}
+                    value={settings.overlayFocusHotkey}
+                    disabled={!settings.overlayEnabled}
+                    onChange={(e) => setSettings({ ...settings, overlayFocusHotkey: e.target.value })}
+                  />
+                </label>
+                <p className="hint" style={{ marginBottom: "1rem" }}>
+                  Use Tauri&apos;s format: modifiers and key separated by <code>+</code> (e.g.{" "}
+                  <code>Shift+Tab</code>, <code>Ctrl+Shift+F</code>). The two shortcuts must differ. Save settings to
+                  apply. If registration fails, try another combination.
+                </p>
+              </>
+            )}
             <div className="panel-head">
               <h2>OAuth application</h2>
               <p className="panel-sub">Keys for the official search API (downloads use a public mirror).</p>
@@ -1388,327 +1148,7 @@ export default function App() {
           </div>
         )}
 
-        {tab === "search" && (
-          <>
-            <div className="panel panel-elevated">
-              <div className="panel-head">
-                <h2>Search beatmaps</h2>
-                <p className="panel-sub">Query the live osu! catalogue, then import or save sets to a collection.</p>
-              </div>
-              {searchError && <div className="error-banner">{searchError}</div>}
-              <div className="grid-2">
-                <label className="field">
-                  <span>Query</span>
-                  <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Artist, title, tags…" />
-                </label>
-                <label className="field">
-                  <span>Mode</span>
-                  <NeuSelect
-                    id="search-mode"
-                    value={mode}
-                    onChange={(v) => setMode(v as Mode)}
-                    options={SEARCH_MODE_OPTIONS}
-                  />
-                </label>
-                <label className="field">
-                  <span>Section</span>
-                  <NeuSelect
-                    id="search-section"
-                    value={section}
-                    onChange={setSection}
-                    options={SEARCH_SECTION_OPTIONS}
-                  />
-                </label>
-                <label className="field">
-                  <span>Sort (default: most played)</span>
-                  <NeuSelect id="search-sort" value={sort} onChange={setSort} options={SEARCH_SORT_OPTIONS} />
-                </label>
-                <label className="field">
-                  <span>Min stars (filter)</span>
-                  <input type="number" step="0.1" value={minStars} onChange={(e) => setMinStars(e.target.value)} />
-                </label>
-                <label className="field">
-                  <span>Max stars (filter)</span>
-                  <input type="number" step="0.1" value={maxStars} onChange={(e) => setMaxStars(e.target.value)} />
-                </label>
-              </div>
-              <details className="advanced">
-                <summary>Advanced filters (API params)</summary>
-                <div className="grid-2" style={{ marginTop: "0.75rem" }}>
-                  <label className="field">
-                    <span>Genre id (g)</span>
-                    <input type="text" value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="e.g. 4" />
-                  </label>
-                  <label className="field">
-                    <span>Language id (l)</span>
-                    <input type="text" value={language} onChange={(e) => setLanguage(e.target.value)} />
-                  </label>
-                  <label className="field">
-                    <span>Extras (e), dot-separated</span>
-                    <input type="text" value={extras} onChange={(e) => setExtras(e.target.value)} placeholder="video" />
-                  </label>
-                  <label className="field">
-                    <span>General (c), dot-separated</span>
-                    <input type="text" value={general} onChange={(e) => setGeneral(e.target.value)} placeholder="featured_artists" />
-                  </label>
-                  <label className="field">
-                    <span>Ranks (r), dot-separated</span>
-                    <input type="text" value={ranks} onChange={(e) => setRanks(e.target.value)} placeholder="S.SH.X" />
-                  </label>
-                  <label className="checkbox-row" style={{ alignSelf: "end" }}>
-                    <input type="checkbox" checked={nsfw} onChange={(e) => setNsfw(e.target.checked)} />
-                    Include NSFW
-                  </label>
-                </div>
-              </details>
-              <div className="row-actions">
-                <button type="button" className="primary" disabled={searching} onClick={() => void runSearch(false)}>
-                  {searching ? "Searching…" : "Search"}
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  disabled={searching || !cursorString}
-                  onClick={() => void runSearch(true)}
-                >
-                  Load more
-                </button>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={noVideo} onChange={(e) => setNoVideo(e.target.checked)} />
-                  Downloads without video (recommended)
-                </label>
-                <label className="checkbox-row">
-                  <input type="checkbox" checked={hideOwnedSearch} onChange={(e) => setHideOwnedSearch(e.target.checked)} />
-                  Hide maps already in Songs folder
-                </label>
-              </div>
-              <div className="curate-panel">
-                <div className="curate-panel-title">Curate</div>
-                <p className="hint curate-panel-desc">
-                  Picks maps you don&apos;t have locally yet (same mode / star / advanced filters as above). Discover uses
-                  your sort and shuffles; New ranked uses ranked sets sorted by most recently ranked.
-                </p>
-                {curateError && <div className="error-banner">{curateError}</div>}
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={curating || searching}
-                    onClick={() => void runCurateDiscover()}
-                  >
-                    {curating ? "Curating…" : "Discover (shuffle)"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={curating || searching}
-                    onClick={() => void runCurateNewRanked()}
-                  >
-                    New ranked
-                  </button>
-                  {curateResults.length > 0 && (
-                    <button type="button" className="secondary" onClick={() => setCurateResults([])}>
-                      Clear curated picks
-                    </button>
-                  )}
-                </div>
-              </div>
-              <p className="hint">
-                Results are filtered client-side so at least one difficulty in the selected mode fits your star range.
-                Downloads are full beatmap sets (.osz). After import, press <strong>F5</strong> in osu!stable song select
-                if needed.
-              </p>
-              {total != null && (
-                <p className="hint">
-                  API total (before star filter): <strong>{total}</strong>
-                </p>
-              )}
-              {activeCollection && (
-                <p className="hint">
-                  <strong>Add to collection:</strong> {activeCollection.name}
-                </p>
-              )}
-            </div>
-
-            {curateResults.length > 0 && (
-              <div className="panel panel-nested curate-results-panel">
-                <div className="panel-head">
-                  <h2>Curated picks</h2>
-                  <p className="panel-sub">Sets not detected in your Songs folder — import or save to a collection.</p>
-                </div>
-                <div className="results results-grid">
-                  {curateResults.map((raw) => {
-                    const set = raw as Record<string, unknown>;
-                    const covers = set.covers as Record<string, string> | undefined;
-                    const sid = Number(set.id);
-                    const disabledDl = (set.availability as { download_disabled?: boolean } | undefined)
-                      ?.download_disabled === true;
-                    const inColl = activeItems.some((c) => c.beatmapsetId === sid);
-                    const importingThis = directImportSetId === sid;
-                    const locallyPresent = localBeatmapsetIds.has(sid);
-                    return (
-                      <div key={`curate-${sid}`} className="result-card">
-                        <img src={covers?.list || covers?.card || ""} alt="" loading="lazy" />
-                        <div className="result-meta">
-                          <div className="title">{String(set.title)}</div>
-                          <div className="sub">
-                            {String(set.artist)} — mapped by {String(set.creator)}
-                          </div>
-                          {set.status != null && <span className="tag">{String(set.status)}</span>}
-                          {locallyPresent && <span className="tag tag-local">In Songs folder</span>}
-                        </div>
-                        <div className="result-actions">
-                          <button
-                            type="button"
-                            className="primary"
-                            disabled={
-                              disabledDl || locallyPresent || importingThis || directImportSetId !== null
-                            }
-                            onClick={() => void importFromSearch(sid)}
-                          >
-                            {locallyPresent
-                              ? "Already imported"
-                              : importingThis
-                                ? "Importing…"
-                                : "Import now"}
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary"
-                            disabled={!partyCanSend || disabledDl}
-                            onClick={() =>
-                              sendBeatmapToParty({
-                                beatmapsetId: sid,
-                                artist: String(set.artist ?? ""),
-                                title: String(set.title ?? ""),
-                                creator: String(set.creator ?? ""),
-                                coverUrl: covers?.list ?? covers?.card ?? null,
-                              })
-                            }
-                            title={
-                              partyCanSend
-                                ? "Leader: queue this set for everyone in the lobby"
-                                : "Create or join a lobby as leader"
-                            }
-                          >
-                            Send to party
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary"
-                            disabled={inColl}
-                            onClick={() => addToCollection(set)}
-                          >
-                            {inColl ? "In this collection" : "Add to collection"}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div className="results results-grid">
-              {searchDisplayResults.length === 0 &&
-                rawResults.length > 0 &&
-                hideOwnedSearch &&
-                searchAttempted &&
-                !searching && (
-                  <div className="empty-state">
-                    <p className="empty-title">All hidden</p>
-                    <p className="empty-text">
-                      Every result is already in your Songs folder. Turn off &quot;Hide maps already in Songs folder&quot; to
-                      see them, or run Search again for different maps.
-                    </p>
-                  </div>
-                )}
-              {rawResults.length === 0 && searchAttempted && !searching && (
-                <div className="empty-state">
-                  <p className="empty-title">No beatmaps here</p>
-                  <p className="empty-text">
-                    Try a wider star range, another section, or a shorter query. Maps with downloads disabled are hidden.
-                  </p>
-                </div>
-              )}
-              {rawResults.length === 0 && !searchAttempted && !searching && (
-                <div className="empty-state">
-                  <p className="empty-title">Ready when you are</p>
-                  <p className="empty-text">Set mode and filters, then press Search to load beatmap sets from osu!.</p>
-                </div>
-              )}
-              {searching && rawResults.length === 0 && (
-                <div className="empty-state">
-                  <div className="boot-spinner boot-spinner-inline" aria-hidden />
-                  <p className="empty-text">Fetching results…</p>
-                </div>
-              )}
-              {searchDisplayResults.map((raw) => {
-                const set = raw as Record<string, unknown>;
-                const covers = set.covers as Record<string, string> | undefined;
-                const sid = Number(set.id);
-                const disabledDl = (set.availability as { download_disabled?: boolean } | undefined)?.download_disabled === true;
-                const inColl = activeItems.some((c) => c.beatmapsetId === sid);
-                const importingThis = directImportSetId === sid;
-                const locallyPresent = localBeatmapsetIds.has(sid);
-                return (
-                                   <div key={sid} className="result-card">
-                    <img src={covers?.list || covers?.card || ""} alt="" loading="lazy" />
-                    <div className="result-meta">
-                      <div className="title">{String(set.title)}</div>
-                      <div className="sub">
-                        {String(set.artist)} — mapped by {String(set.creator)}
-                      </div>
-                      {set.status != null && <span className="tag">{String(set.status)}</span>}
-                      {locallyPresent && <span className="tag tag-local">In Songs folder</span>}
-                    </div>
-                    <div className="result-actions">
-                      <button
-                        type="button"
-                        className="primary"
-                        disabled={
-                          disabledDl || locallyPresent || importingThis || directImportSetId !== null
-                        }
-                        onClick={() => void importFromSearch(sid)}
-                      >
-                        {locallyPresent
-                          ? "Already imported"
-                          : importingThis
-                            ? "Importing…"
-                            : "Import now"}
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={!partyCanSend || disabledDl}
-                        onClick={() =>
-                          sendBeatmapToParty({
-                            beatmapsetId: sid,
-                            artist: String(set.artist ?? ""),
-                            title: String(set.title ?? ""),
-                            creator: String(set.creator ?? ""),
-                            coverUrl: covers?.list ?? covers?.card ?? null,
-                          })
-                        }
-                        title={partyCanSend ? "Leader: queue this set for everyone in the lobby" : "Create or join a lobby as leader"}
-                      >
-                        Send to party
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary"
-                        disabled={inColl}
-                        onClick={() => addToCollection(set)}
-                      >
-                        {inColl ? "In this collection" : "Add to collection"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
+        {tab === "search" && <SearchDownloadPanel s={searchDl} variant="main" />}
 
         {tab === "collection" && (
           <div className="panel panel-elevated">
