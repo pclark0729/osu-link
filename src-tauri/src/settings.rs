@@ -27,6 +27,15 @@ pub struct Settings {
     /// Global shortcut to download one random map from Curate → Discover pool. Empty = disabled.
     #[serde(default = "default_hotkey_random_curate")]
     pub hotkey_random_curate: String,
+    /// Training: open current beatmap in osu! (`osu://`). Empty = disabled.
+    #[serde(default = "default_hotkey_train_open")]
+    pub hotkey_train_open: String,
+    /// Training: swap current map for another in the star band (auto queue only). Empty = disabled.
+    #[serde(default = "default_hotkey_train_randomize")]
+    pub hotkey_train_randomize: String,
+    /// Training: end the in-app session. Empty = disabled.
+    #[serde(default = "default_hotkey_train_end")]
+    pub hotkey_train_end: String,
     /// When true, maintain outbound WebSocket to the party-server `/control` relay for Discord.
     #[serde(default = "default_discord_control_enabled")]
     pub discord_control_enabled: bool,
@@ -46,6 +55,18 @@ fn default_hotkey_random_curate() -> String {
     "Alt+Shift+R".to_string()
 }
 
+fn default_hotkey_train_open() -> String {
+    "Alt+Shift+B".to_string()
+}
+
+fn default_hotkey_train_randomize() -> String {
+    "Alt+Shift+U".to_string()
+}
+
+fn default_hotkey_train_end() -> String {
+    "Alt+Shift+X".to_string()
+}
+
 fn default_discord_control_enabled() -> bool {
     true
 }
@@ -61,6 +82,9 @@ impl Default for Settings {
             social_api_base_url: None,
             hotkey_focus_search: default_hotkey_focus_search(),
             hotkey_random_curate: default_hotkey_random_curate(),
+            hotkey_train_open: default_hotkey_train_open(),
+            hotkey_train_randomize: default_hotkey_train_randomize(),
+            hotkey_train_end: default_hotkey_train_end(),
             discord_control_enabled: true,
             discord_control_session_token: None,
             discord_control_ws_url: None,

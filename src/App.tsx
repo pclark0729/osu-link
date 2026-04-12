@@ -31,6 +31,9 @@ import {
 import {
   DEFAULT_HOTKEY_FOCUS_SEARCH,
   DEFAULT_HOTKEY_RANDOM_CURATE,
+  DEFAULT_HOTKEY_TRAIN_END,
+  DEFAULT_HOTKEY_TRAIN_OPEN,
+  DEFAULT_HOTKEY_TRAIN_RANDOMIZE,
   DEFAULT_PARTY_WS_URL,
   PARTY_SERVER_URL_UI_HIDDEN,
   PUBLIC_PARTY_WS_URL,
@@ -83,6 +86,9 @@ interface Settings {
   socialApiBaseUrl: string | null;
   hotkeyFocusSearch: string;
   hotkeyRandomCurate: string;
+  hotkeyTrainOpen: string;
+  hotkeyTrainRandomize: string;
+  hotkeyTrainEnd: string;
   discordControlEnabled: boolean;
   discordControlSessionToken: string | null;
   discordControlWsUrl: string | null;
@@ -98,6 +104,9 @@ function mapSettingsFromRust(s: Settings): Settings {
     socialApiBaseUrl: s.socialApiBaseUrl ?? null,
     hotkeyFocusSearch: s.hotkeyFocusSearch ?? DEFAULT_HOTKEY_FOCUS_SEARCH,
     hotkeyRandomCurate: s.hotkeyRandomCurate ?? DEFAULT_HOTKEY_RANDOM_CURATE,
+    hotkeyTrainOpen: s.hotkeyTrainOpen ?? DEFAULT_HOTKEY_TRAIN_OPEN,
+    hotkeyTrainRandomize: s.hotkeyTrainRandomize ?? DEFAULT_HOTKEY_TRAIN_RANDOMIZE,
+    hotkeyTrainEnd: s.hotkeyTrainEnd ?? DEFAULT_HOTKEY_TRAIN_END,
     discordControlEnabled: Boolean(s.discordControlEnabled),
     discordControlSessionToken: s.discordControlSessionToken ?? null,
     discordControlWsUrl: s.discordControlWsUrl ?? null,
@@ -119,6 +128,9 @@ function settingsToCmdPayload(s: Settings) {
     socialApiBaseUrl: socialUrl,
     hotkeyFocusSearch: s.hotkeyFocusSearch.trim(),
     hotkeyRandomCurate: s.hotkeyRandomCurate.trim(),
+    hotkeyTrainOpen: s.hotkeyTrainOpen.trim(),
+    hotkeyTrainRandomize: s.hotkeyTrainRandomize.trim(),
+    hotkeyTrainEnd: s.hotkeyTrainEnd.trim(),
     discordControlEnabled: true,
     discordControlSessionToken:
       s.discordControlSessionToken && s.discordControlSessionToken.trim() !== ""
@@ -346,6 +358,9 @@ export default function App() {
   const [searchFocusNonce, setSearchFocusNonce] = useState(0);
   const focusSearchHotkeyRef = useRef<() => void>(() => {});
   const randomCurateHotkeyRef = useRef<() => void>(() => {});
+  const trainHotkeyOpenRef = useRef<() => void>(() => {});
+  const trainHotkeyRandomizeRef = useRef<() => void>(() => {});
+  const trainHotkeyEndRef = useRef<() => void>(() => {});
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [tab, setTab] = useState<AppTab>("search");
   const [settings, setSettings] = useState<Settings>({
@@ -357,6 +372,9 @@ export default function App() {
     socialApiBaseUrl: null,
     hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
     hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
+    hotkeyTrainOpen: DEFAULT_HOTKEY_TRAIN_OPEN,
+    hotkeyTrainRandomize: DEFAULT_HOTKEY_TRAIN_RANDOMIZE,
+    hotkeyTrainEnd: DEFAULT_HOTKEY_TRAIN_END,
     discordControlEnabled: true,
     discordControlSessionToken: null,
     discordControlWsUrl: null,
@@ -951,7 +969,7 @@ export default function App() {
   const onHotkeyDuplicate = useCallback(() => {
     pushToast(
       "error",
-      "Global hotkeys: focus search and random curate cannot use the same shortcut. Only focus search is active.",
+      "Global hotkeys: two or more actions share the same shortcut. Only the first action registered for each key runs.",
     );
   }, [pushToast]);
 
@@ -972,8 +990,14 @@ export default function App() {
     onboardingCompleted: settings.onboardingCompleted,
     focusShortcut: settings.hotkeyFocusSearch,
     randomCurateShortcut: settings.hotkeyRandomCurate,
+    trainOpenShortcut: settings.hotkeyTrainOpen,
+    trainRandomizeShortcut: settings.hotkeyTrainRandomize,
+    trainEndShortcut: settings.hotkeyTrainEnd,
     onFocusSearchRef: focusSearchHotkeyRef,
     onRandomCurateRef: randomCurateHotkeyRef,
+    onTrainOpenRef: trainHotkeyOpenRef,
+    onTrainRandomizeRef: trainHotkeyRandomizeRef,
+    onTrainEndRef: trainHotkeyEndRef,
     onDuplicateShortcuts: onHotkeyDuplicate,
     onRegisterError: onHotkeyRegisterError,
   });
@@ -1513,21 +1537,23 @@ export default function App() {
           id="main-content"
         >
           <ViewContextHeader tab={tab} authLabel={authLabel} partyState={partyState} />
-          <div key={tab} className="main-tab-pane">
+          <div className="main-tab-pane">
+            <div style={{ display: tab === "train" ? "contents" : "none" }}>
+              <TrainPanel
+                pushToast={(tone, message) => pushToast(tone, message)}
+                meOsuId={meOsuId}
+                localBeatmapsetIds={localBeatmapsetIds}
+                onInspectBeatmapset={(id) => setBeatmapsetDetail({ beatmapsetId: id })}
+                trainHotkeyOpenRef={trainHotkeyOpenRef}
+                trainHotkeyRandomizeRef={trainHotkeyRandomizeRef}
+                trainHotkeyEndRef={trainHotkeyEndRef}
+              />
+            </div>
         {tab === "social" && (
           <SocialPanel
             onToast={(tone, message) => pushToast(tone, message)}
             resolvedSocialApiBaseUrl={resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl)}
             socialApiIsOverride={Boolean(settings.socialApiBaseUrl?.trim())}
-          />
-        )}
-
-        {tab === "train" && (
-          <TrainPanel
-            pushToast={(tone, message) => pushToast(tone, message)}
-            meOsuId={meOsuId}
-            localBeatmapsetIds={localBeatmapsetIds}
-            onInspectBeatmapset={(id) => setBeatmapsetDetail({ beatmapsetId: id })}
           />
         )}
 
@@ -1657,6 +1683,36 @@ export default function App() {
                           onChange={(e) => setSettings({ ...settings, hotkeyRandomCurate: e.target.value })}
                         />
                       </label>
+                      <label className="field">
+                        <span>Train: open current map in osu!</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder={DEFAULT_HOTKEY_TRAIN_OPEN}
+                          value={settings.hotkeyTrainOpen}
+                          onChange={(e) => setSettings({ ...settings, hotkeyTrainOpen: e.target.value })}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Train: randomize map (auto queue)</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder={DEFAULT_HOTKEY_TRAIN_RANDOMIZE}
+                          value={settings.hotkeyTrainRandomize}
+                          onChange={(e) => setSettings({ ...settings, hotkeyTrainRandomize: e.target.value })}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Train: end session</span>
+                        <input
+                          type="text"
+                          autoComplete="off"
+                          placeholder={DEFAULT_HOTKEY_TRAIN_END}
+                          value={settings.hotkeyTrainEnd}
+                          onChange={(e) => setSettings({ ...settings, hotkeyTrainEnd: e.target.value })}
+                        />
+                      </label>
                     </div>
                     <div className="row-actions row-actions--spaced u-mt-3">
                       <button
@@ -1667,6 +1723,9 @@ export default function App() {
                             ...s,
                             hotkeyFocusSearch: "",
                             hotkeyRandomCurate: "",
+                            hotkeyTrainOpen: "",
+                            hotkeyTrainRandomize: "",
+                            hotkeyTrainEnd: "",
                           }))
                         }
                       >

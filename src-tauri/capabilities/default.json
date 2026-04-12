@@ -8,6 +8,10 @@
     "core:event:allow-listen",
     "notification:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "osu:*" }]
+    },
     "updater:default",
     "process:default",
     "core:window:allow-minimize",

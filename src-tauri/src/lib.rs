@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use settings::{load_settings, save_settings, Settings};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +34,15 @@ fn get_settings() -> Settings {
 #[tauri::command]
 fn save_settings_cmd(s: Settings) -> Result<(), String> {
     save_settings(&s)
+}
+
+/// Open a beatmap in osu!stable via `osu://` (works when the WebView `open` path fails).
+#[tauri::command]
+async fn open_osu_beatmap(app: tauri::AppHandle, beatmap_id: u64) -> Result<(), String> {
+    let url = format!("osu://b/{}", beatmap_id);
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -466,6 +476,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings_cmd,
+            open_osu_beatmap,
             oauth_login,
             oauth_logout,
             auth_status,

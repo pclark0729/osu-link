@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::osu_api;
 use crate::party_discovery::{
-    resolve_discord_control_ws_url_effective, resolve_social_api_base_effective,
+    pairing_http_base_candidates, resolve_discord_control_ws_url_effective,
 };
 use crate::settings::{load_settings, save_settings, settings_with_draft_urls, Settings};
 
@@ -57,32 +57,39 @@ pub async fn prepare_pairing(
 ) -> Result<Value, String> {
     let disk = load_settings();
     let mut s = settings_with_draft_urls(&disk, party_server_url_draft, social_api_base_url_draft);
-    let base = resolve_social_api_base_effective(&s)
-        .await
-        .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
+    let candidates = pairing_http_base_candidates(&s).await;
+    if candidates.is_empty() {
+        return Err("Set Party server URL or Social API base URL (Settings).".to_string());
+    }
     let token = gen_session_token();
     let code = gen_pair_code();
     let token_hash = sha256_hex(&token);
-    let url = format!(
-        "{}/api/v1/discord-control/pairing",
-        base.trim_end_matches('/')
-    );
+    let body_json = json!({ "code": code, "tokenHash": token_hash });
     let client = reqwest::Client::new();
-    let res = client
-        .post(&url)
-        .json(&json!({ "code": code, "tokenHash": token_hash }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let status = res.status();
-    let body = res.text().await.map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        return Err(format!("pairing HTTP {}: {}", status, body));
+    let mut last_err = "All pairing endpoints failed.".to_string();
+    for base in candidates {
+        let url = format!(
+            "{}/api/v1/discord-control/pairing",
+            base.trim_end_matches('/')
+        );
+        let res = match client.post(&url).json(&body_json).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        };
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        if status.is_success() {
+            s.discord_control_session_token = Some(token);
+            s.discord_control_enabled = true;
+            save_settings(&s)?;
+            return Ok(json!({ "code": code }));
+        }
+        last_err = format!("pairing HTTP {}: {}", status, body);
     }
-    s.discord_control_session_token = Some(token);
-    s.discord_control_enabled = true;
-    save_settings(&s)?;
-    Ok(json!({ "code": code }))
+    Err(last_err)
 }
 
 pub async fn pairing_status() -> Result<Value, String> {
@@ -92,22 +99,37 @@ pub async fn pairing_status() -> Result<Value, String> {
         .as_deref()
         .filter(|x| !x.is_empty())
         .ok_or_else(|| "No session token".to_string())?;
-    let base = resolve_social_api_base_effective(&s)
-        .await
-        .ok_or_else(|| "Set Party server URL or Social API base URL.".to_string())?;
-    let url = format!(
-        "{}/api/v1/discord-control/status",
-        base.trim_end_matches('/')
-    );
+    let candidates = pairing_http_base_candidates(&s).await;
+    if candidates.is_empty() {
+        return Err("Set Party server URL or Social API base URL.".to_string());
+    }
     let client = reqwest::Client::new();
-    let res = client
-        .get(&url)
-        .header("Authorization", format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    let text = res.text().await.map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"))
+    let mut last_err = "All status endpoints failed.".to_string();
+    for base in candidates {
+        let url = format!(
+            "{}/api/v1/discord-control/status",
+            base.trim_end_matches('/')
+        );
+        let res = match client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        };
+        let status = res.status();
+        let text = res.text().await.map_err(|e| e.to_string())?;
+        if status.is_success() {
+            return serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"));
+        }
+        last_err = format!("status HTTP {}: {}", status, text);
+    }
+    Err(last_err)
 }
 
 pub async fn revoke_session() -> Result<(), String> {
@@ -118,16 +140,23 @@ pub async fn revoke_session() -> Result<(), String> {
         save_settings(&s)?;
         return Ok(());
     };
-    if let Some(base) = resolve_social_api_base_effective(&s).await {
+    let candidates = pairing_http_base_candidates(&s).await;
+    let client = reqwest::Client::new();
+    for base in candidates {
         let url = format!(
             "{}/api/v1/discord-control/revoke",
             base.trim_end_matches('/')
         );
-        let _ = reqwest::Client::new()
+        if let Ok(res) = client
             .post(&url)
             .header("Authorization", format!("Bearer {}", token))
             .send()
-            .await;
+            .await
+        {
+            if res.status().is_success() {
+                break;
+            }
+        }
     }
     let mut s = load_settings();
     s.discord_control_session_token = None;

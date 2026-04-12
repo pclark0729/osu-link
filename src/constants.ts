@@ -39,6 +39,9 @@ export function defaultPartyWsUrlFromSettings(saved: string | null | undefined):
 /** Default global shortcuts (Tauri format); persisted in settings. */
 export const DEFAULT_HOTKEY_FOCUS_SEARCH = "Alt+Shift+O";
 export const DEFAULT_HOTKEY_RANDOM_CURATE = "Alt+Shift+R";
+export const DEFAULT_HOTKEY_TRAIN_OPEN = "Alt+Shift+B";
+export const DEFAULT_HOTKEY_TRAIN_RANDOMIZE = "Alt+Shift+U";
+export const DEFAULT_HOTKEY_TRAIN_END = "Alt+Shift+X";
 
 /** Must match `OAUTH_LOOPBACK_PORT` in `src-tauri/src/oauth.rs`. */
 export const OAUTH_REDIRECT_URI = "http://127.0.0.1:42813/callback";

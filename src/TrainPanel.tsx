@@ -1,6 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type MutableRefObject } from "react";
 import { buildSharedTrainingPayload, parseImportedTrainingSetJson, serializeSharedTrainingSet } from "./trainingShare";
 import { computeTrainingBaseline } from "./trainBaseline";
 import { appendMapOutcome, appendSessionSummary } from "./trainHistory";
@@ -70,11 +69,17 @@ export function TrainPanel({
   meOsuId,
   localBeatmapsetIds,
   onInspectBeatmapset,
+  trainHotkeyOpenRef,
+  trainHotkeyRandomizeRef,
+  trainHotkeyEndRef,
 }: {
   pushToast: (tone: ToastTone, message: string) => void;
   meOsuId: number | null;
   localBeatmapsetIds: Set<number>;
   onInspectBeatmapset?: (beatmapsetId: number) => void;
+  trainHotkeyOpenRef: MutableRefObject<() => void>;
+  trainHotkeyRandomizeRef: MutableRefObject<() => void>;
+  trainHotkeyEndRef: MutableRefObject<() => void>;
 }) {
   const [session, setSession] = useState<TrainSessionStateV1 | null>(() => loadTrainSession());
   const [savedSets, setSavedSets] = useState<SavedTrainingSet[]>(() => loadTrainingSets());
@@ -134,7 +139,7 @@ export function TrainPanel({
   const openOsuBeatmap = useCallback(async (beatmapId: number) => {
     if (!isTauri()) return;
     try {
-      await openUrl(`osu://b/${beatmapId}`);
+      await invoke("open_osu_beatmap", { beatmapId });
     } catch (e) {
       pushToast("error", String(e));
     }
@@ -327,7 +332,7 @@ export function TrainPanel({
     if (!session || session.paused || meOsuId == null) return;
     let cancelled = false;
     const tick = async () => {
-      if (cancelled || document.visibilityState === "hidden" || handlingPassRef.current) return;
+      if (cancelled || handlingPassRef.current) return;
       try {
         const raw = await invoke<unknown>("osu_user_recent_scores", {
           userId: meOsuId,
@@ -424,6 +429,10 @@ export function TrainPanel({
 
   const rerollCurrent = useCallback(async () => {
     if (!session || !current) return;
+    if (session.source !== "auto") {
+      pushToast("info", "Randomize map is only for auto queue sessions.");
+      return;
+    }
     setBusy(true);
     try {
       const exclude = new Set(session.usedBeatmapsetIds.filter((id) => id !== current.beatmapsetId));
@@ -446,6 +455,29 @@ export function TrainPanel({
       setBusy(false);
     }
   }, [session, current, pushToast, openOsuBeatmap]);
+
+  useEffect(() => {
+    trainHotkeyOpenRef.current = () => {
+      if (!session) return;
+      const cur = session.queue[session.currentIndex];
+      if (!cur) return;
+      void openOsuBeatmap(cur.beatmapId);
+    };
+    trainHotkeyRandomizeRef.current = () => {
+      void rerollCurrent();
+    };
+    trainHotkeyEndRef.current = () => {
+      if (session) endSession(session, "user");
+    };
+  }, [
+    session,
+    openOsuBeatmap,
+    rerollCurrent,
+    endSession,
+    trainHotkeyOpenRef,
+    trainHotkeyRandomizeRef,
+    trainHotkeyEndRef,
+  ]);
 
   const replaceCurrentWithSet = useCallback(
     (raw: unknown) => {
@@ -668,6 +700,10 @@ export function TrainPanel({
               End session
             </button>
           </div>
+          <p className="hint">
+            Global shortcuts (Settings → Keyboard): open current map, randomize (auto queue), end session — work while osu! is
+            focused.
+          </p>
           <p className="hint">
             Step {session.currentIndex + 1} / {session.queue.length} · band ★{session.starMin.toFixed(2)}–
             {session.starMax.toFixed(2)}
