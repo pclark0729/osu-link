@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
+import { MainPaneSticky } from "./MainPaneSticky";
 import { BeatmapResultCard } from "./BeatmapResultCard";
 import { NeuSelect } from "./NeuSelect";
 import {
@@ -142,7 +143,7 @@ export function SearchDownloadPanel({
   return (
     <>
       <div className="panel panel-elevated">
-        <div className="main-pane-sticky">
+        <MainPaneSticky>
           <div className="panel-head">
             <h2>Search beatmaps</h2>
             <p className="panel-sub">
@@ -352,7 +353,7 @@ export function SearchDownloadPanel({
             </button>
           </div>
         </div>
-        </div>
+        </MainPaneSticky>
         {searchError && (
           <div className="error-banner error-banner--recover" role="alert">
             <span>{searchError}</span>

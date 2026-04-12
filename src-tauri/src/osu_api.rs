@@ -22,7 +22,7 @@ pub fn mirror_download_urls(set_id: i64, no_video: bool) -> Vec<String> {
     ]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SearchInput {
     pub q: Option<String>,
     /// osu! search mode int: 0 osu, 1 taiko, 2 fruits, 3 mania

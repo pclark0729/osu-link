@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 export type NeuSelectOption = { value: string; label: string };
@@ -118,15 +119,7 @@ export function NeuSelect({
       >
         <span className="neu-select-value">{label}</span>
         <span className="neu-select-chevron" aria-hidden>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M7 10l5 5 5-5"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <ChevronDown size={18} aria-hidden />
         </span>
       </button>
       {open && (

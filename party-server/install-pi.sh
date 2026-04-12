@@ -19,6 +19,8 @@
 #                     (same Wi‑Fi when your router has no NAT hairpin). Do not port-forward 4680 on the router.
 #                     Set to 0 to bind127.0.0.1 only (no raw LAN WebSocket).
 #   INSTALL_USER    — systemd runs as this user (default: user who invoked sudo, else pi)
+#   INSTALL_DISCORD_BOT — set to 0 to skip Discord bot deploy (default: 1 if ../discord-bot exists)
+#   DISCORD_BOT_ROOT  — install path for discord-bot (default: /opt/osu-link-discord)
 #
 
 set -euo pipefail
@@ -31,8 +33,12 @@ PARTY_LAN_WS="${PARTY_LAN_WS:-1}"
 INSTALL_ROOT="${INSTALL_ROOT:-/opt/osu-link-party}"
 LOGDIR="${LOGDIR:-/var/log/osu-link-party}"
 SERVICE_NAME="osu-party"
+INSTALL_DISCORD_BOT="${INSTALL_DISCORD_BOT:-1}"
+DISCORD_BOT_ROOT="${DISCORD_BOT_ROOT:-/opt/osu-link-discord}"
+DISCORD_SERVICE_NAME="${DISCORD_SERVICE_NAME:-osu-link-discord}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DISCORD_BOT_SRC="${SCRIPT_DIR}/../discord-bot"
 
 if [[ "${EUID:-0}" -ne 0 ]]; then
   echo "Run as root so systemd can be configured, e.g.:"
@@ -52,6 +58,23 @@ fi
 if ! id "${RUN_USER}" &>/dev/null; then
   echo "User ${RUN_USER} does not exist."
   exit 1
+fi
+
+PARTY_HTTP_PORT=$((PARTY_PORT + 1))
+
+DISCORD_INTERNAL_SECRET_VALUE=""
+INSTALL_DISCORD=0
+if [[ "${INSTALL_DISCORD_BOT}" == "1" ]] && [[ -f "${DISCORD_BOT_SRC}/package.json" ]]; then
+  INSTALL_DISCORD=1
+  if [[ -f /etc/osu-link-party.env ]]; then
+    DISCORD_INTERNAL_SECRET_VALUE="$(grep '^DISCORD_INTERNAL_SECRET=' /etc/osu-link-party.env 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' || true)"
+  fi
+  if [[ -z "${DISCORD_INTERNAL_SECRET_VALUE}" ]] && [[ -f /etc/osu-link-discord.env ]]; then
+    DISCORD_INTERNAL_SECRET_VALUE="$(grep '^DISCORD_INTERNAL_SECRET=' /etc/osu-link-discord.env 2>/dev/null | sed 's/^[^=]*=//' | tr -d '"' || true)"
+  fi
+  if [[ -z "${DISCORD_INTERNAL_SECRET_VALUE}" ]]; then
+    DISCORD_INTERNAL_SECRET_VALUE="$(openssl rand -hex 32)"
+  fi
 fi
 
 if [[ ! -f "${SCRIPT_DIR}/index.mjs" ]] || [[ ! -f "${SCRIPT_DIR}/package.json" ]]; then
@@ -109,6 +132,7 @@ HOST=${WS_HOST}
 PORT=${PARTY_PORT}
 LOG_LEVEL=info
 RUN_USER=${RUN_USER}
+DISCORD_INTERNAL_SECRET=${DISCORD_INTERNAL_SECRET_VALUE}
 EOF
 chmod 644 /etc/osu-link-party.env
 
@@ -193,6 +217,81 @@ systemctl restart "${SERVICE_NAME}"
 sleep 1
 systemctl --no-pager -l status "${SERVICE_NAME}" || true
 
+if [[ "${INSTALL_DISCORD}" == "1" ]]; then
+  echo "==> Deploy Discord bot ${DISCORD_BOT_ROOT}"
+  mkdir -p "${DISCORD_BOT_ROOT}"
+  rsync -a \
+    --delete \
+    --exclude node_modules \
+    --exclude .git \
+    "${DISCORD_BOT_SRC}/" "${DISCORD_BOT_ROOT}/"
+  chown -R "${RUN_USER}:${RUN_USER}" "${DISCORD_BOT_ROOT}"
+  echo "==> npm install discord-bot (as ${RUN_USER})"
+  sudo -u "${RUN_USER}" bash -c "cd '${DISCORD_BOT_ROOT}' && npm install --omit=dev"
+
+  if [[ ! -f /etc/osu-link-discord.env ]]; then
+    cat >/etc/osu-link-discord.env <<EOF
+# osu-link Discord bot — edit DISCORD_CLIENT_ID and DISCORD_BOT_TOKEN, then: systemctl restart ${DISCORD_SERVICE_NAME}
+RELAY_INTERNAL_URL=http://127.0.0.1:${PARTY_HTTP_PORT}
+DISCORD_INTERNAL_SECRET=${DISCORD_INTERNAL_SECRET_VALUE}
+DISCORD_CLIENT_ID=
+DISCORD_BOT_TOKEN=
+EOF
+    chmod 600 /etc/osu-link-discord.env
+    chown "${RUN_USER}:${RUN_USER}" /etc/osu-link-discord.env
+  else
+    echo "    (keeping existing /etc/osu-link-discord.env — update RELAY_INTERNAL_URL if PARTY_PORT changed)"
+  fi
+
+  echo "==> systemd: ${DISCORD_SERVICE_NAME}.service"
+  cat >/etc/systemd/system/${DISCORD_SERVICE_NAME}.service <<EOF
+[Unit]
+Description=osu-link Discord bot (slash commands → party relay)
+Documentation=file://${INSTALL_ROOT}/README.md
+After=network-online.target ${SERVICE_NAME}.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${RUN_USER}
+Group=${RUN_USER}
+WorkingDirectory=${DISCORD_BOT_ROOT}
+EnvironmentFile=/etc/osu-link-discord.env
+Environment=NODE_ENV=production
+ExecStart=${NODE_BIN} ${DISCORD_BOT_ROOT}/index.mjs
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+
+  DISCORD_TOKEN_SET=0
+  if [[ -f /etc/osu-link-discord.env ]]; then
+    # shellcheck disable=SC1091
+    set -a
+    source /etc/osu-link-discord.env
+    set +a
+    if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+      DISCORD_TOKEN_SET=1
+    fi
+  fi
+
+  if [[ "${DISCORD_TOKEN_SET}" == "1" ]]; then
+    systemctl enable --now "${DISCORD_SERVICE_NAME}"
+    sleep 1
+    systemctl --no-pager -l status "${DISCORD_SERVICE_NAME}" || true
+  else
+    echo "    Discord bot unit installed but not enabled — set DISCORD_BOT_TOKEN and DISCORD_CLIENT_ID in /etc/osu-link-discord.env, then:"
+    echo "      sudo systemctl enable --now ${DISCORD_SERVICE_NAME}"
+    systemctl disable "${DISCORD_SERVICE_NAME}" 2>/dev/null || true
+    systemctl stop "${DISCORD_SERVICE_NAME}" 2>/dev/null || true
+  fi
+fi
+
 if [[ "${SETUP_CADDY}" == "1" ]]; then
   echo "==> Installing Caddy for https://${PUBLIC_DOMAIN}"
   if ! command -v caddy &>/dev/null; then
@@ -210,8 +309,16 @@ if [[ "${SETUP_CADDY}" == "1" ]]; then
     cat >>"${CADDY_MAIN}" <<EOF
 
 # --- osu-link party server (install-pi.sh) ---
+# Party lobby WS: ${PARTY_PORT}. HTTP+Discord control WS: $((PARTY_PORT + 1)) (/api/v1, /health, /control).
 ${PUBLIC_DOMAIN} {
-	reverse_proxy 127.0.0.1:${PARTY_PORT}
+	route {
+		reverse_proxy /control* 127.0.0.1:$((PARTY_PORT + 1))
+		reverse_proxy /api/* 127.0.0.1:$((PARTY_PORT + 1))
+		reverse_proxy /internal/* 127.0.0.1:$((PARTY_PORT + 1))
+		reverse_proxy /health* 127.0.0.1:$((PARTY_PORT + 1))
+		reverse_proxy /ready* 127.0.0.1:$((PARTY_PORT + 1))
+		reverse_proxy 127.0.0.1:${PARTY_PORT}
+	}
 }
 EOF
   fi
@@ -237,8 +344,14 @@ if [[ "${USE_SCREEN}" == "1" ]]; then
 else
   echo "  Logs:        journalctl -u ${SERVICE_NAME} -f"
 fi
-echo "  Health:      curl -s http://127.0.0.1:$((PARTY_PORT + 1))/health | head -c 400"
+echo "  Health:      curl -s http://127.0.0.1:${PARTY_HTTP_PORT}/health | head -c 400"
 echo ""
+if [[ "${INSTALL_DISCORD}" == "1" ]]; then
+  echo "  Discord bot: systemctl status ${DISCORD_SERVICE_NAME}"
+  echo "  Secrets:     /etc/osu-link-discord.env (chmod 600) — DISCORD_CLIENT_ID, DISCORD_BOT_TOKEN"
+  echo "  Relay:       RELAY_INTERNAL_URL=http://127.0.0.1:${PARTY_HTTP_PORT} (must match party HTTP port)"
+  echo ""
+fi
 if [[ "${SETUP_CADDY}" == "1" ]]; then
   echo "  Clients set Party URL to:"
   echo "    wss://${PUBLIC_DOMAIN}"

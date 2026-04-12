@@ -35,6 +35,23 @@ The HTTP server (default port `PORT + 1`, e.g. `4681`) serves JSON **`/api/v1/*`
 
 Rate limit for `/api/v1`: **`API_RATE_MAX`** (default `300` per IP per minute).
 
+## Discord remote control (desktop via relay)
+
+When the SQLite database is available, the HTTP server (default port **`PORT + 1`**) also exposes:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/v1/discord-control/pairing` | Register a pairing code + `tokenHash` (SHA-256 hex of session token) from osu-link |
+| GET | `/api/v1/discord-control/status` | `Authorization: Bearer <session token>` — link status |
+| POST | `/api/v1/discord-control/revoke` | Revoke session (Bearer token) |
+| GET | WebSocket `/control` | Outbound desktop session (Bearer token); relays Discord commands |
+| POST | `/internal/discord/link` | **Loopback only** — bot completes pairing (`code`, `discordUserId`) |
+| POST | `/internal/discord/command` | **Loopback only** — bot sends `ping`, `download`, `search` to connected desktop |
+
+Set **`DISCORD_INTERNAL_SECRET`** in the party-server environment (same value the Discord bot uses in `X-Internal-Secret`). Never expose `/internal/*` publicly.
+
+TLS: WebSocket upgrades for **`/control`** must reach the **HTTP** port (`PORT + 1`), not the party lobby WebSocket port (`PORT`). The `install-pi.sh` Caddy snippet routes `/control*`, `/api/*`, `/internal/*`, and `/health*` to that HTTP port.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -49,6 +66,9 @@ Rate limit for `/api/v1`: **`API_RATE_MAX`** (default `300` per IP per minute).
 | `LOG_LEVEL` | `info` | `error` · `warn` · `info` · `debug` |
 | `DEBUG_WS` | — | Set to `1` to log each client message `type=` (no full payloads). |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Max wait when stopping (SIGTERM/SIGINT). |
+| `DISCORD_INTERNAL_SECRET` | — | Shared secret for `POST /internal/discord/*` (must match `discord-bot` on the Pi). |
+| `DISCORD_PAIRING_RATE_MAX` | `30` | Max pairing POSTs per IP per minute. |
+| `DISCORD_INTERNAL_RATE_MAX` | `120` | Max internal bot POSTs per IP per minute. |
 
 ## Health & readiness (operations)
 
@@ -131,6 +151,54 @@ After a TLS install, set osu-link’s Party URL to:
 `wss://osulink.peyton-clark.com` (or your `PUBLIC_DOMAIN`).
 
 Point DNS **A/AAAA** for that hostname at the Pi’s public IP; open **80** and **443** on the router/firewall so Let’s Encrypt can issue a certificate.
+
+## Discord bot (same Pi)
+
+**`install-pi.sh`** copies `../discord-bot` to **`/opt/osu-link-discord`**, runs `npm install`, writes **`/etc/osu-link-discord.env`**, and installs **`osu-link-discord.service`**. It generates **`DISCORD_INTERNAL_SECRET`** for both party-server and the bot (or reuses an existing value from a previous run). Set **`DISCORD_CLIENT_ID`** and **`DISCORD_BOT_TOKEN`** in `/etc/osu-link-discord.env`, then:
+
+```bash
+sudo systemctl enable --now osu-link-discord
+```
+
+Skip the bot: `INSTALL_DISCORD_BOT=0 sudo ./install-pi.sh`.
+
+Manual run (no systemd):
+
+```bash
+cd discord-bot
+npm install
+export DISCORD_BOT_TOKEN=…
+export DISCORD_CLIENT_ID=…
+export DISCORD_INTERNAL_SECRET=…   # same as party-server
+export RELAY_INTERNAL_URL=http://127.0.0.1:4681
+node index.mjs
+```
+
+Create a **Discord Application** → Bot → copy token; **OAuth2 → General** → copy Application ID for `DISCORD_CLIENT_ID`. Install the bot to your server with `applications.commands` scope.
+
+**systemd** unit is created by `install-pi.sh`; equivalent manual unit:
+
+```ini
+[Unit]
+Description=osu-link Discord bot
+After=network-online.target osu-party.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/osu-link-discord
+Environment=RELAY_INTERNAL_URL=http://127.0.0.1:4681
+EnvironmentFile=/etc/osu-link-discord.env
+ExecStart=/usr/bin/node index.mjs
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Put secrets in `/etc/osu-link-discord.env` (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`; `DISCORD_INTERNAL_SECRET` is set by the install script to match party-server).
 
 ## Raspberry Pi (manual systemd) hint
 

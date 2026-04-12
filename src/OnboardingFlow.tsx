@@ -109,6 +109,9 @@ export function OnboardingFlow({
           socialApiBaseUrl: null,
           hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
           hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
+          discordControlEnabled: false,
+          discordControlSessionToken: null,
+          discordControlWsUrl: null,
         },
       });
       await invoke("oauth_login");
@@ -125,6 +128,9 @@ export function OnboardingFlow({
           socialApiBaseUrl: null,
           hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
           hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
+          discordControlEnabled: false,
+          discordControlSessionToken: null,
+          discordControlWsUrl: null,
         },
       });
       onFinished();

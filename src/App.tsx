@@ -1,5 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type ChangeEvent,
@@ -11,6 +12,17 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  BarChart3,
+  Dumbbell,
+  Library,
+  List,
+  Search,
+  Settings,
+  Trophy,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import {
   buildSharedPayload,
   parseImportedCollectionJson,
@@ -41,13 +53,16 @@ import { parseLobbyCodeFromText } from "./party/parseLobbyCode";
 import { PartyPanel } from "./PartyPanel";
 import { BeatmapsetDetailModal, type BeatmapsetDetailTarget } from "./BeatmapsetDetailModal";
 import { SearchDownloadPanel } from "./SearchDownloadPanel";
+import { AchievementsPanel } from "./AchievementsPanel";
 import { PersonalStatsPanel } from "./PersonalStatsPanel";
+import { TrainPanel } from "./TrainPanel";
 import { resolveSocialApiBaseUrl } from "./socialApiUrl";
 import { SocialPanel } from "./SocialPanel";
 import { TitleBar } from "./TitleBar";
 import { useSearchDownloadState } from "./useSearchDownloadState";
 import { useGlobalHotkeys } from "./useGlobalHotkeys";
 import { DownloadLogsPanel } from "./DownloadLogsPanel";
+import { MainPaneSticky } from "./MainPaneSticky";
 import { DOWNLOAD_LOG_MAX, newDownloadLogId, type DownloadLogEntry } from "./downloadLog";
 import packageJson from "../package.json";
 import type { Update } from "@tauri-apps/plugin-updater";
@@ -68,6 +83,52 @@ interface Settings {
   socialApiBaseUrl: string | null;
   hotkeyFocusSearch: string;
   hotkeyRandomCurate: string;
+  discordControlEnabled: boolean;
+  discordControlSessionToken: string | null;
+  discordControlWsUrl: string | null;
+}
+
+function mapSettingsFromRust(s: Settings): Settings {
+  return {
+    clientId: s.clientId ?? "",
+    clientSecret: s.clientSecret ?? "",
+    beatmapDirectory: s.beatmapDirectory ?? null,
+    onboardingCompleted: s.onboardingCompleted !== false,
+    partyServerUrl: s.partyServerUrl ?? null,
+    socialApiBaseUrl: s.socialApiBaseUrl ?? null,
+    hotkeyFocusSearch: s.hotkeyFocusSearch ?? DEFAULT_HOTKEY_FOCUS_SEARCH,
+    hotkeyRandomCurate: s.hotkeyRandomCurate ?? DEFAULT_HOTKEY_RANDOM_CURATE,
+    discordControlEnabled: Boolean(s.discordControlEnabled),
+    discordControlSessionToken: s.discordControlSessionToken ?? null,
+    discordControlWsUrl: s.discordControlWsUrl ?? null,
+  };
+}
+
+function settingsToCmdPayload(s: Settings) {
+  const partyUrl =
+    s.partyServerUrl && s.partyServerUrl.trim() !== "" ? s.partyServerUrl.trim() : null;
+  const socialUrl =
+    s.socialApiBaseUrl && s.socialApiBaseUrl.trim() !== "" ? s.socialApiBaseUrl.trim() : null;
+  return {
+    clientId: s.clientId.trim(),
+    clientSecret: s.clientSecret.trim(),
+    beatmapDirectory:
+      s.beatmapDirectory && s.beatmapDirectory.trim() !== "" ? s.beatmapDirectory.trim() : null,
+    onboardingCompleted: s.onboardingCompleted,
+    partyServerUrl: partyUrl,
+    socialApiBaseUrl: socialUrl,
+    hotkeyFocusSearch: s.hotkeyFocusSearch.trim(),
+    hotkeyRandomCurate: s.hotkeyRandomCurate.trim(),
+    discordControlEnabled: s.discordControlEnabled,
+    discordControlSessionToken:
+      s.discordControlSessionToken && s.discordControlSessionToken.trim() !== ""
+        ? s.discordControlSessionToken.trim()
+        : null,
+    discordControlWsUrl:
+      s.discordControlWsUrl && s.discordControlWsUrl.trim() !== ""
+        ? s.discordControlWsUrl.trim()
+        : null,
+  };
 }
 
 function randomId(): string {
@@ -98,91 +159,6 @@ function downloadTextFile(filename: string, text: string): void {
 
 type Toast = { tone: "info" | "success" | "error"; message: string };
 
-function IconSearch() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
-      <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconCollections() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M4 6h16M4 12h16M4 18h10"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function IconSettings() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="2" />
-      <path
-        d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function IconParty() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function IconSocial() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM20 8v6M23 11h-6"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function IconStats() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M4 19V5M10 19v-6M16 19V9M22 19V12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconLogs() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path
-        d="M8 6h13M8 12h13M8 18h13M4 6h.01M4 12h.01M4 18h.01"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 const initialPartyState = (url: string): PartyClientState => ({
   connection: "disconnected",
   lastError: null,
@@ -197,7 +173,16 @@ const initialPartyState = (url: string): PartyClientState => ({
 });
 
 /** Primary destinations — copy aligned with NN/g recognition & real-world task names. */
-type AppTab = "search" | "collection" | "party" | "social" | "stats" | "logs" | "settings";
+type AppTab =
+  | "search"
+  | "collection"
+  | "party"
+  | "social"
+  | "train"
+  | "stats"
+  | "achievements"
+  | "logs"
+  | "settings";
 
 const VIEW_COPY: Record<AppTab, { title: string; subtitle: string }> = {
   search: {
@@ -216,9 +201,17 @@ const VIEW_COPY: Record<AppTab, { title: string; subtitle: string }> = {
     title: "Social",
     subtitle: "Friends, activity, battles, challenges, and leaderboards.",
   },
+  train: {
+    title: "Train",
+    subtitle: "Ramping queue, accuracy goals, and osu! deep links.",
+  },
   stats: {
     title: "Stats",
     subtitle: "Performance trends and charts from your recent scores.",
+  },
+  achievements: {
+    title: "Achievements",
+    subtitle: "Badges from training and social play — sync when the party server is online.",
   },
   logs: {
     title: "Logs",
@@ -364,7 +357,17 @@ export default function App() {
     socialApiBaseUrl: null,
     hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
     hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
+    discordControlEnabled: false,
+    discordControlSessionToken: null,
+    discordControlWsUrl: null,
   });
+  const [discordPairingCode, setDiscordPairingCode] = useState<string | null>(null);
+  const [discordWsConnected, setDiscordWsConnected] = useState(false);
+  const [discordRemote, setDiscordRemote] = useState<{
+    linked: boolean;
+    discordUserId?: string;
+    online?: boolean;
+  } | null>(null);
   const [resolvedSongs, setResolvedSongs] = useState<string>("");
   const [authLabel, setAuthLabel] = useState<string>("Signed out");
   const [meOsuId, setMeOsuId] = useState<number | null>(null);
@@ -600,16 +603,7 @@ export default function App() {
   const handleOnboardingFinished = useCallback(async () => {
     try {
       const s = await invoke<Settings>("get_settings");
-      setSettings({
-        clientId: s.clientId ?? "",
-        clientSecret: s.clientSecret ?? "",
-        beatmapDirectory: s.beatmapDirectory ?? null,
-        onboardingCompleted: s.onboardingCompleted !== false,
-        partyServerUrl: s.partyServerUrl ?? null,
-        socialApiBaseUrl: s.socialApiBaseUrl ?? null,
-        hotkeyFocusSearch: s.hotkeyFocusSearch ?? DEFAULT_HOTKEY_FOCUS_SEARCH,
-        hotkeyRandomCurate: s.hotkeyRandomCurate ?? DEFAULT_HOTKEY_RANDOM_CURATE,
-      });
+      setSettings(mapSettingsFromRust(s));
     } catch {
       setSettings((prev) => ({ ...prev, onboardingCompleted: true }));
     }
@@ -621,16 +615,7 @@ export default function App() {
     void (async () => {
       try {
         const s = await invoke<Settings>("get_settings");
-        setSettings({
-          clientId: s.clientId ?? "",
-          clientSecret: s.clientSecret ?? "",
-          beatmapDirectory: s.beatmapDirectory ?? null,
-          onboardingCompleted: s.onboardingCompleted !== false,
-          partyServerUrl: s.partyServerUrl ?? null,
-          socialApiBaseUrl: s.socialApiBaseUrl ?? null,
-          hotkeyFocusSearch: s.hotkeyFocusSearch ?? DEFAULT_HOTKEY_FOCUS_SEARCH,
-          hotkeyRandomCurate: s.hotkeyRandomCurate ?? DEFAULT_HOTKEY_RANDOM_CURATE,
-        });
+        setSettings(mapSettingsFromRust(s));
         const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
         partyClientRef.current?.setUrl(urls[0]);
         setPartyState((prev) => ({ ...prev, url: urls[0] }));
@@ -743,6 +728,68 @@ export default function App() {
   }, [bootReady, settings.onboardingCompleted]);
 
   useEffect(() => {
+    if (!isTauri() || !bootReady) return;
+    let unlisten: (() => void) | undefined;
+    void listen<{ connected?: boolean }>("discord-control-status", (e) => {
+      setDiscordWsConnected(Boolean(e.payload.connected));
+    }).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, [bootReady]);
+
+  useEffect(() => {
+    if (!discordPairingCode || !isTauri()) return;
+    const id = window.setInterval(() => {
+      void (async () => {
+        try {
+          const st = await invoke<{ linked?: boolean; discordUserId?: string; online?: boolean }>(
+            "discord_control_pairing_status",
+          );
+          if (st.linked) {
+            setDiscordPairingCode(null);
+            const s = await invoke<Settings>("get_settings");
+            setSettings(mapSettingsFromRust(s));
+            setDiscordRemote({
+              linked: true,
+              discordUserId: st.discordUserId,
+              online: st.online,
+            });
+            pushToast("success", "Discord account linked.");
+          }
+        } catch {
+          /* ignore */
+        }
+      })();
+    }, 2000);
+    return () => window.clearInterval(id);
+  }, [discordPairingCode]);
+
+  useEffect(() => {
+    if (!isTauri() || tab !== "settings" || !bootReady) return;
+    if (!settings.discordControlSessionToken) {
+      setDiscordRemote(null);
+      return;
+    }
+    void (async () => {
+      try {
+        const st = await invoke<{ linked?: boolean; discordUserId?: string; online?: boolean }>(
+          "discord_control_pairing_status",
+        );
+        setDiscordRemote({
+          linked: Boolean(st.linked),
+          discordUserId: st.discordUserId,
+          online: st.online,
+        });
+      } catch {
+        setDiscordRemote(null);
+      }
+    })();
+  }, [tab, bootReady, settings.discordControlSessionToken]);
+
+  useEffect(() => {
     if (!bootReady || !PARTY_SERVER_URL_UI_HIDDEN) return;
     if (partyUserPrefersOfflineRef.current) return;
     const urls = buildPartyConnectUrlCandidates(settings.partyServerUrl);
@@ -759,25 +806,7 @@ export default function App() {
     setSettingsMsg(null);
     try {
       await invoke("save_settings_cmd", {
-        s: {
-          clientId: settings.clientId.trim(),
-          clientSecret: settings.clientSecret.trim(),
-          beatmapDirectory:
-            settings.beatmapDirectory && settings.beatmapDirectory.trim() !== ""
-              ? settings.beatmapDirectory.trim()
-              : null,
-          onboardingCompleted: false,
-          partyServerUrl:
-            settings.partyServerUrl && settings.partyServerUrl.trim() !== ""
-              ? settings.partyServerUrl.trim()
-              : null,
-          socialApiBaseUrl:
-            settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
-              ? settings.socialApiBaseUrl.trim()
-              : null,
-          hotkeyFocusSearch: settings.hotkeyFocusSearch.trim(),
-          hotkeyRandomCurate: settings.hotkeyRandomCurate.trim(),
-        },
+        s: { ...settingsToCmdPayload(settings), onboardingCompleted: false },
       });
       setSettings((prev) => ({ ...prev, onboardingCompleted: false }));
     } catch (e) {
@@ -964,7 +993,7 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
       const k = e.key;
-      if (k < "1" || k > "7") return;
+      if (k < "1" || k > "9") return;
       const t = e.target;
       if (t instanceof Element && t.closest("input, textarea, select, [contenteditable='true']")) return;
       e.preventDefault();
@@ -973,7 +1002,9 @@ export default function App() {
         "collection",
         "party",
         "social",
+        "train",
         "stats",
+        "achievements",
         "logs",
         "settings",
       ];
@@ -990,24 +1021,8 @@ export default function App() {
         settings.partyServerUrl && settings.partyServerUrl.trim() !== ""
           ? settings.partyServerUrl.trim()
           : null;
-      const socialUrl =
-        settings.socialApiBaseUrl && settings.socialApiBaseUrl.trim() !== ""
-          ? settings.socialApiBaseUrl.trim()
-          : null;
       await invoke("save_settings_cmd", {
-        s: {
-          clientId: settings.clientId.trim(),
-          clientSecret: settings.clientSecret.trim(),
-          beatmapDirectory:
-            settings.beatmapDirectory && settings.beatmapDirectory.trim() !== ""
-              ? settings.beatmapDirectory.trim()
-              : null,
-          onboardingCompleted: settings.onboardingCompleted,
-          partyServerUrl: partyUrl,
-          socialApiBaseUrl: socialUrl,
-          hotkeyFocusSearch: settings.hotkeyFocusSearch.trim(),
-          hotkeyRandomCurate: settings.hotkeyRandomCurate.trim(),
-        },
+        s: settingsToCmdPayload(settings),
       });
       const wsUrl = defaultPartyWsUrlFromSettings(partyUrl);
       partyClientRef.current?.setUrl(wsUrl);
@@ -1036,6 +1051,32 @@ export default function App() {
     await invoke("oauth_logout");
     await refreshAuth();
     setSettingsMsg("Signed out.");
+  };
+
+  const startDiscordPairing = async () => {
+    try {
+      const r = await invoke<{ code?: string }>("discord_control_prepare_pairing");
+      if (r.code) setDiscordPairingCode(r.code);
+      const s = await invoke<Settings>("get_settings");
+      setSettings(mapSettingsFromRust(s));
+      pushToast("success", "Pairing code ready. In Discord run: /osulink link (with your code).");
+    } catch (e) {
+      pushToast("error", String(e));
+    }
+  };
+
+  const revokeDiscordControl = async () => {
+    try {
+      await invoke("discord_control_revoke");
+      setDiscordPairingCode(null);
+      setDiscordRemote(null);
+      setDiscordWsConnected(false);
+      const s = await invoke<Settings>("get_settings");
+      setSettings(mapSettingsFromRust(s));
+      pushToast("success", "Discord control revoked.");
+    } catch (e) {
+      pushToast("error", String(e));
+    }
   };
 
   const importOne = async (item: CollectionItem) => {
@@ -1313,7 +1354,7 @@ export default function App() {
             title="Catalog — search and download beatmaps · Alt+1"
           >
             <span className="side-nav-icon">
-              <IconSearch />
+              <Search size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Search</span>
           </button>
@@ -1325,7 +1366,7 @@ export default function App() {
             title={`${activeItems.length} maps in "${activeCollection?.name ?? "—"}" · ${totalMapsInLibrary} total across collections · Alt+2`}
           >
             <span className="side-nav-icon">
-              <IconCollections />
+              <Library size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Collections</span>
           </button>
@@ -1341,7 +1382,7 @@ export default function App() {
             }
           >
             <span className="side-nav-icon">
-              <IconParty />
+              <Users size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Party</span>
           </button>
@@ -1353,31 +1394,55 @@ export default function App() {
             title="Friends, activity, battles, challenges, leaderboard · Alt+4"
           >
             <span className="side-nav-icon">
-              <IconSocial />
+              <UserPlus size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Social</span>
+          </button>
+          <button
+            type="button"
+            className={`side-nav-item ${tab === "train" ? "active" : ""}`}
+            onClick={() => setTab("train")}
+            aria-current={tab === "train" ? "page" : undefined}
+            title="Training queue and drills · Alt+5"
+          >
+            <span className="side-nav-icon">
+              <Dumbbell size={20} aria-hidden />
+            </span>
+            <span className="side-nav-text">Train</span>
           </button>
           <button
             type="button"
             className={`side-nav-item ${tab === "stats" ? "active" : ""}`}
             onClick={() => setTab("stats")}
             aria-current={tab === "stats" ? "page" : undefined}
-            title="Performance stats and charts · Alt+5"
+            title="Performance stats and charts · Alt+6"
           >
             <span className="side-nav-icon">
-              <IconStats />
+              <BarChart3 size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Stats</span>
+          </button>
+          <button
+            type="button"
+            className={`side-nav-item ${tab === "achievements" ? "active" : ""}`}
+            onClick={() => setTab("achievements")}
+            aria-current={tab === "achievements" ? "page" : undefined}
+            title="Badges and share cards · Alt+7"
+          >
+            <span className="side-nav-icon">
+              <Trophy size={20} aria-hidden />
+            </span>
+            <span className="side-nav-text">Achievements</span>
           </button>
           <button
             type="button"
             className={`side-nav-item ${tab === "logs" ? "active" : ""}`}
             onClick={() => setTab("logs")}
             aria-current={tab === "logs" ? "page" : undefined}
-            title="Download history and import paths · Alt+6"
+            title="Download history and import paths · Alt+8"
           >
             <span className="side-nav-icon">
-              <IconLogs />
+              <List size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Logs</span>
           </button>
@@ -1386,10 +1451,10 @@ export default function App() {
             className={`side-nav-item ${tab === "settings" ? "active" : ""}`}
             onClick={() => setTab("settings")}
             aria-current={tab === "settings" ? "page" : undefined}
-            title="Account, OAuth, paths, and notifications · Alt+7"
+            title="Account, OAuth, paths, and notifications · Alt+9"
           >
             <span className="side-nav-icon">
-              <IconSettings />
+              <Settings size={20} aria-hidden />
             </span>
             <span className="side-nav-text">Settings</span>
           </button>
@@ -1397,7 +1462,7 @@ export default function App() {
 
         <div className="side-footer">
           <div className="auth-compact">{authLabel}</div>
-          <p className="side-nav-shortcut-hint">Alt+1–7 switch tabs</p>
+          <p className="side-nav-shortcut-hint">Alt+1–9 switch tabs</p>
           <p className="side-credit">Made by Peyton</p>
         </div>
       </aside>
@@ -1437,8 +1502,28 @@ export default function App() {
           />
         )}
 
+        {tab === "train" && (
+          <TrainPanel
+            pushToast={(tone, message) => pushToast(tone, message)}
+            meOsuId={meOsuId}
+            localBeatmapsetIds={localBeatmapsetIds}
+            onInspectBeatmapset={(id) => setBeatmapsetDetail({ beatmapsetId: id })}
+          />
+        )}
+
         {tab === "stats" && (
-          <PersonalStatsPanel onToast={(tone, message) => pushToast(tone, message)} />
+          <PersonalStatsPanel
+            onToast={(tone, message) => pushToast(tone, message)}
+            onGoToTrain={() => setTab("train")}
+          />
+        )}
+
+        {tab === "achievements" && (
+          <AchievementsPanel
+            pushToast={(tone, message) => pushToast(tone, message)}
+            resolvedSocialApiBaseUrl={resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl)}
+            onboardingCompleted={settings.onboardingCompleted}
+          />
         )}
 
         {tab === "logs" && (
@@ -1502,21 +1587,21 @@ export default function App() {
 
         {tab === "settings" && (
           <div className="panel panel-elevated settings-panel">
-            <div className="main-pane-sticky">
+            <MainPaneSticky>
               <div className="panel-head">
                 <h2>Settings</h2>
                 <p className="panel-sub">
                   Version <strong>{appVersion}</strong> · updates via GitHub Releases.
                 </p>
               </div>
-            </div>
+            </MainPaneSticky>
 
             <details className="settings-disclosure">
               <summary>Keyboard shortcuts</summary>
               <div className="settings-disclosure-body">
                 <p className="hint settings-shortcuts-hint">
                   <strong>Main window:</strong> Alt+1 Search · Alt+2 Collections · Alt+3 Party · Alt+4 Social · Alt+5
-                  Stats · Alt+6 Logs · Alt+7 Settings
+                  Train · Alt+6 Stats · Alt+7 Achievements · Alt+8 Logs · Alt+9 Settings
                 </p>
                 {isTauri() && (
                   <>
@@ -1705,6 +1790,57 @@ export default function App() {
                     }
                   />
                 </label>
+                <label className="field field--stack">
+                  <span>Discord control WebSocket URL (optional)</span>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    placeholder="Derived from Social API base if empty (…/control)"
+                    value={settings.discordControlWsUrl ?? ""}
+                    onChange={(e) =>
+                      setSettings({
+                        ...settings,
+                        discordControlWsUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
+                      })
+                    }
+                  />
+                </label>
+                <label className="field field--row" style={{ alignItems: "center", gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={settings.discordControlEnabled}
+                    onChange={(e) =>
+                      setSettings({ ...settings, discordControlEnabled: e.target.checked })
+                    }
+                  />
+                  <span>Enable Discord remote control (outbound connection to relay)</span>
+                </label>
+                {discordPairingCode && (
+                  <p className="hint">
+                    Pairing code: <strong>{discordPairingCode}</strong> — run{" "}
+                    <code>/osulink link</code> in Discord with this code (expires in ~15 minutes).
+                  </p>
+                )}
+                {settings.discordControlSessionToken && (
+                  <p className="hint">
+                    Relay:{" "}
+                    {discordRemote?.linked
+                      ? `linked (Discord user ${discordRemote.discordUserId ?? "?"})`
+                      : "waiting for link in Discord"}{" "}
+                    · App session: {discordWsConnected ? "connected" : "disconnected"}
+                    {discordRemote?.online != null && (
+                      <> · Desktop seen by relay: {discordRemote.online ? "online" : "offline"}</>
+                    )}
+                  </p>
+                )}
+                <div className="row-actions">
+                  <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void startDiscordPairing()}>
+                    Start Discord pairing
+                  </button>
+                  <button type="button" className="danger" disabled={!isTauri()} onClick={() => void revokeDiscordControl()}>
+                    Revoke Discord link
+                  </button>
+                </div>
                 <p className="hint">
                   Songs folder: {resolvedSongs || "—"} · <strong>{localBeatmapsetIds.size}</strong> set
                   {localBeatmapsetIds.size === 1 ? "" : "s"} found (subfolders scanned).

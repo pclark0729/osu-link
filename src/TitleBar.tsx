@@ -1,38 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Copy, Minus, Square, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-
-function IconMinimize() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M5 12h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconMaximize() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <rect x="4" y="4" width="16" height="16" rx="1" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function IconRestore() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <rect x="8" y="10" width="11" height="11" stroke="currentColor" strokeWidth="2" rx="1" />
-      <rect x="5" y="3" width="11" height="11" stroke="currentColor" strokeWidth="2" rx="1" />
-    </svg>
-  );
-}
-
-function IconClose() {
-  return (
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
@@ -89,13 +57,13 @@ export function TitleBar() {
       </div>
       <div className="title-bar-controls">
         <button type="button" className="title-bar-btn title-bar-btn-min" onClick={onMinimize} aria-label="Minimize">
-          <IconMinimize />
+          <Minus size={10} aria-hidden />
         </button>
         <button type="button" className="title-bar-btn title-bar-btn-max" onClick={onToggleMax} aria-label={maximized ? "Restore" : "Maximize"}>
-          {maximized ? <IconRestore /> : <IconMaximize />}
+          {maximized ? <Copy size={11} aria-hidden /> : <Square size={10} aria-hidden />}
         </button>
         <button type="button" className="title-bar-btn title-bar-btn-close" onClick={onClose} aria-label="Close">
-          <IconClose />
+          <X size={10} aria-hidden />
         </button>
       </div>
     </header>

@@ -549,6 +549,44 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       return json(res, 200, { battle: mapBattleRow(b2), scores });
     }
 
+    if (method === "POST" && pathname === "/api/v1/achievements/sync") {
+      const body = await readBody(req);
+      const items = body?.items;
+      if (!Array.isArray(items)) {
+        return json(res, 400, { error: "bad_request", message: "items array required" });
+      }
+      const upsert = db.prepare(
+        `INSERT INTO user_achievements (osu_id, achievement_id, earned_at_ms)
+         VALUES (?, ?, ?)
+         ON CONFLICT(osu_id, achievement_id) DO UPDATE SET
+           earned_at_ms = MIN(user_achievements.earned_at_ms, excluded.earned_at_ms)`,
+      );
+      let n = 0;
+      for (const raw of items) {
+        const id = typeof raw?.achievementId === "string" ? raw.achievementId.trim() : "";
+        const t = Number(raw?.earnedAtMs);
+        if (!id || id.length > 128 || !Number.isFinite(t) || t < 0) continue;
+        upsert.run(me, id, Math.round(t));
+        n += 1;
+      }
+      return json(res, 200, { ok: true, applied: n });
+    }
+
+    if (method === "GET" && /^\/api\/v1\/users\/\d+\/achievements$/.test(pathname)) {
+      const target = Number(pathname.match(/\/users\/(\d+)\/achievements/)?.[1]);
+      if (!Number.isFinite(target)) return json(res, 400, { error: "bad_request" });
+      if (target !== me) {
+        const friends = friendOsuIds(db, me);
+        if (!friends.has(target)) {
+          return json(res, 403, { error: "forbidden", message: "not_friend" });
+        }
+      }
+      const rows = db
+        .prepare(`SELECT achievement_id AS achievementId, earned_at_ms AS earnedAtMs FROM user_achievements WHERE osu_id = ? ORDER BY earned_at_ms ASC`)
+        .all(target);
+      return json(res, 200, { achievements: rows });
+    }
+
     return json(res, 404, { error: "not_found" });
   } catch (e) {
     console.error("[api]", e);

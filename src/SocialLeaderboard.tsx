@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -488,29 +488,43 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
   }, [rows]);
 
   const radarOptions: NeuSelectOption[] = useMemo(() => {
-    const ok = rows.filter((r) => !r.error);
-    return [{ value: "", label: "Group median" }, ...ok.map((r) => ({ value: String(r.osuId), label: r.label }))];
-  }, [rows]);
+    const ok = sorted.filter((r) => !r.error);
+    return ok.map((r) => ({ value: String(r.osuId), label: r.label }));
+  }, [sorted]);
 
-  const radarData = useMemo(() => {
+  useLayoutEffect(() => {
+    const ok = sorted.filter((r) => !r.error);
+    if (ok.length === 0) return;
+    const ids = new Set(ok.map((r) => String(r.osuId)));
+    if (radarTarget && ids.has(radarTarget)) return;
+    const preferred = meId != null ? ok.find((r) => r.osuId === meId) : null;
+    setRadarTarget(String((preferred ?? ok[0]).osuId));
+  }, [sorted, meId, radarTarget]);
+
+  const radarChart = useMemo(() => {
     const ok = rows.filter((r) => !r.error);
-    if (ok.length === 0) return [];
+    if (ok.length === 0) {
+      return { data: [] as { metric: string; A: number; B: number }[], compareLabel: "", baselineLabel: "Group median" };
+    }
     const med = medianRadar(ok);
-    const targetId = radarTarget ? Number(radarTarget) : null;
-    const targetRow =
-      targetId != null
-        ? ok.find((r) => r.osuId === targetId)
-        : meId != null
-          ? ok.find((r) => r.osuId === meId)
-          : ok[0];
-    const a = targetRow ? normRadar(ok, targetRow) : med;
+    const targetId = Number(radarTarget);
+    const targetRow = Number.isFinite(targetId) ? ok.find((r) => r.osuId === targetId) : undefined;
+    const row = targetRow ?? ok[0];
+    const a = normRadar(ok, row);
     const keys = Object.keys(med) as (keyof RadarNorm)[];
-    return keys.map((k) => ({
+    const data = keys.map((k) => ({
       metric: k,
       A: a[k],
       B: med[k],
     }));
+    return {
+      data,
+      compareLabel: row.label,
+      baselineLabel: "Group median",
+    };
   }, [rows, radarTarget]);
+
+  const { data: radarData, compareLabel: radarCompareLabel, baselineLabel: radarBaselineLabel } = radarChart;
 
   const gapToAbove = (idx: number): string => {
     if (sortKey !== "pp" || idx === 0) return "";
@@ -613,8 +627,11 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
             </div>
             <div className="social-lb-chart-card social-lb-radar-card">
               <div className="social-lb-radar-head">
-                <h4 className="social-h4">Shape vs median</h4>
-                <NeuSelect value={radarTarget} disabled={disabled} options={radarOptions} onChange={setRadarTarget} />
+                <h4 className="social-h4">Shape vs group median</h4>
+                <div className="social-lb-radar-compare" role="group" aria-label="Profile to compare on the radar chart">
+                  <span className="social-lb-radar-compare-label">Profile</span>
+                  <NeuSelect value={radarTarget} disabled={disabled} options={radarOptions} onChange={setRadarTarget} />
+                </div>
               </div>
               <div className="social-lb-chart-inner">
                 {radarData.length > 0 ? (
@@ -622,9 +639,22 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
                     <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="75%">
                       <PolarGrid />
                       <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
-                      <Radar name="Player" dataKey="A" stroke="var(--lb-radar-a)" fill="var(--lb-radar-a)" fillOpacity={0.35} />
-                      <Radar name="Median" dataKey="B" stroke="var(--lb-radar-b)" fill="var(--lb-radar-b)" fillOpacity={0.2} />
+                      <Radar
+                        name={radarCompareLabel}
+                        dataKey="A"
+                        stroke="var(--lb-radar-a)"
+                        fill="var(--lb-radar-a)"
+                        fillOpacity={0.35}
+                      />
+                      <Radar
+                        name={radarBaselineLabel}
+                        dataKey="B"
+                        stroke="var(--lb-radar-b)"
+                        fill="var(--lb-radar-b)"
+                        fillOpacity={0.2}
+                      />
                       <Legend />
+                      <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                     </RadarChart>
                   </ResponsiveContainer>
                 ) : (

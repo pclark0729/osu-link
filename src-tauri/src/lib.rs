@@ -1,5 +1,6 @@
 mod beatmap_avg_pp;
 mod collections;
+mod discord_control;
 mod import;
 mod local_library;
 mod oauth;
@@ -85,8 +86,7 @@ async fn auth_status() -> Result<AuthStatus, String> {
     })
 }
 
-#[tauri::command]
-async fn search_beatmapsets(input: osu_api::SearchInput) -> Result<Value, String> {
+pub(crate) async fn search_beatmapsets_impl(input: osu_api::SearchInput) -> Result<Value, String> {
     let s = load_settings();
     if s.client_id.is_empty() || s.client_secret.is_empty() {
         return Err("Configure OAuth Client ID and Secret.".into());
@@ -99,6 +99,11 @@ async fn search_beatmapsets(input: osu_api::SearchInput) -> Result<Value, String
     )
     .await?;
     osu_api::api_search(&token, &input).await
+}
+
+#[tauri::command]
+async fn search_beatmapsets(input: osu_api::SearchInput) -> Result<Value, String> {
+    search_beatmapsets_impl(input).await
 }
 
 /// Average PP from global leaderboard scores (`GET /beatmaps/{id}/scores`, mean of `pp` on returned scores).
@@ -185,8 +190,7 @@ fn get_local_beatmapset_ids() -> Result<Vec<i64>, String> {
     local_library::scan_local_beatmapset_ids(&dir)
 }
 
-#[tauri::command]
-async fn download_and_import(set_id: i64, no_video: bool) -> Result<String, String> {
+pub(crate) async fn download_and_import_impl(set_id: i64, no_video: bool) -> Result<String, String> {
     let s = load_settings();
     let songs = paths::resolve_beatmap_directory(s.beatmap_directory.as_deref())?;
     let urls = osu_api::mirror_download_urls(set_id, no_video);
@@ -253,6 +257,11 @@ async fn download_and_import(set_id: i64, no_video: bool) -> Result<String, Stri
         errors.len(),
         errors.join("\n")
     ))
+}
+
+#[tauri::command]
+async fn download_and_import(set_id: i64, no_video: bool) -> Result<String, String> {
+    download_and_import_impl(set_id, no_video).await
 }
 
 #[tauri::command]
@@ -411,6 +420,21 @@ async fn osu_user_first_scores(
     osu_api::api_user_scores(&token, user_id, "first", lim, m, offset).await
 }
 
+#[tauri::command]
+async fn discord_control_prepare_pairing() -> Result<Value, String> {
+    discord_control::prepare_pairing().await
+}
+
+#[tauri::command]
+async fn discord_control_pairing_status() -> Result<Value, String> {
+    discord_control::pairing_status().await
+}
+
+#[tauri::command]
+async fn discord_control_revoke() -> Result<(), String> {
+    discord_control::revoke_session().await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -419,6 +443,13 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                discord_control::run_forever(handle).await;
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings_cmd,
@@ -444,6 +475,9 @@ pub fn run() {
             osu_user_recent_scores,
             osu_user_best_scores,
             osu_user_first_scores,
+            discord_control_prepare_pairing,
+            discord_control_pairing_status,
+            discord_control_revoke,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

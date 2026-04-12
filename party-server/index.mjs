@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 
 import { handleSocialApi } from "./api.mjs";
+import { createControlRelay } from "./control.mjs";
 import { defaultDbPath, openDatabase } from "./db.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -38,6 +39,10 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 120;
 /** REST /api/v1 per-IP budget per minute */
 const API_RATE_MAX = Number(process.env.API_RATE_MAX) || 300;
+/** Discord pairing POST /api/v1/discord-control/pairing per IP per minute */
+const DISCORD_PAIRING_RATE_MAX = Number(process.env.DISCORD_PAIRING_RATE_MAX) || 30;
+/** Internal Discord bot → relay API per IP per minute */
+const DISCORD_INTERNAL_RATE_MAX = Number(process.env.DISCORD_INTERNAL_RATE_MAX) || 120;
 const SHUTDOWN_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -74,6 +79,9 @@ try {
   log.error(`Social database init failed: ${/** @type {Error} */ (e).message}`);
 }
 
+/** @type {ReturnType<typeof createControlRelay> | null} */
+let controlRelay = null;
+
 function checkApiRate(ip) {
   const now = Date.now();
   let b = apiRateBuckets.get(ip);
@@ -99,6 +107,36 @@ const lobbies = new Map();
 const socketMeta = new WeakMap();
 const rateBuckets = new Map();
 const apiRateBuckets = new Map();
+const discordPairingRateBuckets = new Map();
+const discordInternalRateBuckets = new Map();
+
+if (socialDb) {
+  controlRelay = createControlRelay({
+    db: socialDb,
+    log,
+    checkPairingRate(ip) {
+      const now = Date.now();
+      let b = discordPairingRateBuckets.get(ip);
+      if (!b || now - b.t0 > RATE_WINDOW_MS) {
+        b = { t0: now, count: 0 };
+        discordPairingRateBuckets.set(ip, b);
+      }
+      b.count += 1;
+      return b.count <= DISCORD_PAIRING_RATE_MAX;
+    },
+    checkInternalRate(ip) {
+      const now = Date.now();
+      let b = discordInternalRateBuckets.get(ip);
+      if (!b || now - b.t0 > RATE_WINDOW_MS) {
+        b = { t0: now, count: 0 };
+        discordInternalRateBuckets.set(ip, b);
+      }
+      b.count += 1;
+      return b.count <= DISCORD_INTERNAL_RATE_MAX;
+    },
+  });
+  log.info("Discord control relay enabled (/control WebSocket, /api/v1/discord-control/*)");
+}
 
 function genCode() {
   let code;
@@ -171,7 +209,7 @@ function lobbyStats() {
 
 function healthPayload() {
   const { lobbyCount, membersTotal } = lobbyStats();
-  return {
+  const base = {
     ok: true,
     service: "osu-link-party-server",
     version: pkg.version,
@@ -191,6 +229,10 @@ function healthPayload() {
       membersTotal,
     },
   };
+  if (controlRelay) {
+    Object.assign(base, controlRelay.getHealthExtras());
+  }
+  return base;
 }
 
 class Lobby {
@@ -607,55 +649,103 @@ if (HEALTH_PORT > 0) {
     const fullUrl = req.url ?? "/";
     const pathname = new URL(fullUrl, "http://localhost").pathname;
     const method = req.method || "GET";
+    const ip = getClientIp(req);
 
-    if (pathname.startsWith("/api/v1")) {
-      if (!socialDb) {
-        res.statusCode = 503;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ error: "database_unavailable" }));
-        return;
-      }
-      const ip = getClientIp(req);
-      if (!checkApiRate(ip)) {
-        res.statusCode = 429;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ error: "rate_limited" }));
-        return;
-      }
-      void handleSocialApi(socialDb, req, res, method, pathname).catch((e) => {
-        log.error("handleSocialApi exception:", e);
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify({ error: "internal" }));
+    const finish = () => {
+      if (pathname.startsWith("/api/v1")) {
+        if (pathname.startsWith("/api/v1/discord-control")) {
+          if (!socialDb || !controlRelay) {
+            res.statusCode = 503;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ error: "discord_control_unavailable" }));
+            return;
+          }
+          void controlRelay.handleHttpRequest(req, res, pathname, method, ip).then((handled) => {
+            if (handled) return;
+            res.statusCode = 404;
+            res.end();
+          });
+          return;
         }
-      });
-      return;
-    }
+        if (!socialDb) {
+          res.statusCode = 503;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ error: "database_unavailable" }));
+          return;
+        }
+        if (!checkApiRate(ip)) {
+          res.statusCode = 429;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ error: "rate_limited" }));
+          return;
+        }
+        void handleSocialApi(socialDb, req, res, method, pathname).catch((e) => {
+          log.error("handleSocialApi exception:", e);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ error: "internal" }));
+          }
+        });
+        return;
+      }
 
-    const url = pathname;
-    if (url === "/health" || url === "/healthz") {
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify(healthPayload()));
-      return;
-    }
-    if (url === "/ready") {
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      const ready = wsListening;
-      res.statusCode = ready ? 200 : 503;
-      res.end(JSON.stringify({ ready, websocketListening: wsListening }));
-      return;
-    }
-    res.statusCode = 404;
-    res.end();
+      if (pathname.startsWith("/internal/")) {
+        if (!socialDb || !controlRelay) {
+          res.statusCode = 503;
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ error: "discord_control_unavailable" }));
+          return;
+        }
+        void controlRelay.handleHttpRequest(req, res, pathname, method, ip).then((handled) => {
+          if (!handled) {
+            res.statusCode = 404;
+            res.end();
+          }
+        });
+        return;
+      }
+
+      const url = pathname;
+      if (url === "/health" || url === "/healthz") {
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(JSON.stringify(healthPayload()));
+        return;
+      }
+      if (url === "/ready") {
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        const ready = wsListening;
+        res.statusCode = ready ? 200 : 503;
+        res.end(JSON.stringify({ ready, websocketListening: wsListening }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    };
+
+    finish();
   });
 
   healthServer.on("error", (err) => {
     log.error(`Health HTTP server error: ${err.message}`);
   });
 
+  if (controlRelay) {
+    healthServer.on("upgrade", (req, socket, head) => {
+      const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/control") {
+        controlRelay.handleUpgrade(req, socket, head);
+      } else {
+        socket.destroy();
+      }
+    });
+  }
+
   healthServer.listen(HEALTH_PORT, HEALTH_HOST, () => {
     log.info(`Health HTTP http://${HEALTH_HOST}:${HEALTH_PORT}/health (GET JSON status)`);
+    if (controlRelay) {
+      log.info(`Discord control WebSocket upgrade path ws://${HEALTH_HOST}:${HEALTH_PORT}/control`);
+    }
   });
 } else {
   log.info("Health HTTP disabled (HEALTH_PORT=0 or DISABLE_HEALTH=1)");

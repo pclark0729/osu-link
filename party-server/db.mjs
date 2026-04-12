@@ -97,6 +97,30 @@ const MIGRATIONS = [
   ALTER TABLE score_submissions ADD COLUMN baseline_pp_per_star REAL;
   ALTER TABLE score_submissions ADD COLUMN is_unweighted INTEGER NOT NULL DEFAULT 0;
   `,
+  `
+  CREATE TABLE IF NOT EXISTS user_achievements (
+    osu_id INTEGER NOT NULL,
+    achievement_id TEXT NOT NULL,
+    earned_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (osu_id, achievement_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_achievements_osu ON user_achievements(osu_id);
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS discord_pairings (
+    code TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS discord_control_sessions (
+    discord_user_id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_discord_control_sessions_hash ON discord_control_sessions(token_hash);
+  `,
 ];
 
 /**

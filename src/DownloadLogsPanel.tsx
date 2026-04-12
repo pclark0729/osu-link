@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { MainPaneSticky } from "./MainPaneSticky";
 import type { DownloadLogEntry, DownloadLogSource } from "./downloadLog";
 
 const SOURCE_LABEL: Record<DownloadLogSource, string> = {
@@ -56,7 +57,7 @@ export function DownloadLogsPanel({
 
   return (
     <div className="panel panel-elevated download-logs-panel">
-      <div className="main-pane-sticky">
+      <MainPaneSticky>
         <div className="panel-head download-logs-head">
           <h2>Download log</h2>
           <p className="panel-sub panel-sub--flush-top">
@@ -80,7 +81,7 @@ export function DownloadLogsPanel({
             </button>
           </div>
         </div>
-      </div>
+      </MainPaneSticky>
 
       {entries.length === 0 ? (
         <p className="hint download-logs-empty">

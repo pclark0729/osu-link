@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "build:installer": "node scripts/resolve-and-sync-version.mjs && node scripts/tauri-build-with-signing.mjs",
     "party-server": "npm start --prefix party-server",
+    "discord-bot": "npm start --prefix discord-bot",
     "test": "vitest run"
   },
   "dependencies": {
@@ -20,6 +21,8 @@
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2",
     "@tauri-apps/plugin-updater": "^2",
+    "html-to-image": "^1.11.13",
+    "lucide-react": "^1.8.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "recharts": "^2.15.4"

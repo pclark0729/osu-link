@@ -56,8 +56,6 @@ export type BattlesPanelProps = {
   displayNameForOsu: (osuId: number) => string;
   friendSelectOptions: NeuSelectOption[];
   resolvedSocialApiBaseUrl: string | null;
-  /** Parent Social "Refresh" or initial load in progress */
-  lockUi: boolean;
   /** Increment to refetch battles (e.g. after parent refresh completes) */
   refreshSignal: number;
 };
@@ -71,7 +69,6 @@ export function BattlesPanel({
   displayNameForOsu,
   friendSelectOptions,
   resolvedSocialApiBaseUrl,
-  lockUi,
   refreshSignal,
 }: BattlesPanelProps) {
   const [busy, setBusy] = useState(false);
@@ -242,7 +239,7 @@ export function BattlesPanel({
     [hydratedTitles],
   );
 
-  const uiLocked = lockUi || busy;
+  const uiLocked = busy;
 
   const createBattle = async () => {
     const opp =

@@ -1,0 +1,16 @@
+{
+  "name": "osu-link-discord-bot",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Discord slash commands → osu-link desktop via party-server relay",
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -27,6 +27,15 @@ pub struct Settings {
     /// Global shortcut to download one random map from Curate → Discover pool. Empty = disabled.
     #[serde(default = "default_hotkey_random_curate")]
     pub hotkey_random_curate: String,
+    /// When true, maintain outbound WebSocket to the party-server `/control` relay for Discord.
+    #[serde(default)]
+    pub discord_control_enabled: bool,
+    /// Session token for Discord control (paired with relay SQLite). Empty = not paired / cleared.
+    #[serde(default)]
+    pub discord_control_session_token: Option<String>,
+    /// Override WebSocket URL for control (e.g. wss://example.com/control). If unset, derived from Social API base.
+    #[serde(default)]
+    pub discord_control_ws_url: Option<String>,
 }
 
 fn default_hotkey_focus_search() -> String {
@@ -48,6 +57,9 @@ impl Default for Settings {
             social_api_base_url: None,
             hotkey_focus_search: default_hotkey_focus_search(),
             hotkey_random_curate: default_hotkey_random_curate(),
+            discord_control_enabled: false,
+            discord_control_session_token: None,
+            discord_control_ws_url: None,
         }
     }
 }
@@ -135,4 +147,17 @@ fn party_ws_to_http_base(ws: &str) -> Option<String> {
         return Some(format!("https://{rest}"));
     }
     None
+}
+
+/// WebSocket URL for Discord remote control (`wss://host[:port]/control`).
+pub fn resolve_discord_control_ws_url(settings: &Settings) -> Option<String> {
+    if let Some(ref u) = settings.discord_control_ws_url {
+        let t = u.trim();
+        if !t.is_empty() {
+            return Some(t.trim_end_matches('/').to_string());
+        }
+    }
+    let base = resolve_social_api_base(settings)?;
+    let rest = base.strip_prefix("https://")?;
+    Some(format!("wss://{rest}/control"))
 }
