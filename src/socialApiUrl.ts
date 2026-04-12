@@ -44,3 +44,22 @@ export function resolveSocialApiBaseUrl(
   const ws = (partyServerUrl?.trim() || HOSTED_PARTY_WS_URL || DEFAULT_PARTY_WS_URL).trim();
   return partyWsToHttpBase(ws);
 }
+
+/**
+ * Match Rust `http_base_to_control_ws_url` / Discord control WebSocket derivation:
+ * same host:port scheme as REST (`http` → `ws`, `https` → `wss`).
+ */
+export function httpBaseToDiscordControlWsUrl(base: string): string | null {
+  const b = base.trim().replace(/\/$/, "");
+  if (b.startsWith("https://")) {
+    const rest = b.slice("https://".length);
+    if (!rest) return null;
+    return `wss://${rest}/control`;
+  }
+  if (b.startsWith("http://")) {
+    const rest = b.slice("http://".length);
+    if (!rest) return null;
+    return `ws://${rest}/control`;
+  }
+  return null;
+}

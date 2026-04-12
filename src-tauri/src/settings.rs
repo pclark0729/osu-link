@@ -149,7 +149,9 @@ fn party_ws_to_http_base(ws: &str) -> Option<String> {
     None
 }
 
-/// WebSocket URL for Discord remote control (`wss://host[:port]/control`).
+/// WebSocket URL for Discord remote control (`ws://` or `wss://` host[:port]/control).
+/// Uses the same base as [`resolve_social_api_base`]: `http://…` → `ws://…`, `https://…` → `wss://…`
+/// so LAN party URLs (`ws://pi:4680` → HTTP API on :4681) match party-server without NAT hairpin.
 pub fn resolve_discord_control_ws_url(settings: &Settings) -> Option<String> {
     if let Some(ref u) = settings.discord_control_ws_url {
         let t = u.trim();
@@ -158,6 +160,51 @@ pub fn resolve_discord_control_ws_url(settings: &Settings) -> Option<String> {
         }
     }
     let base = resolve_social_api_base(settings)?;
-    let rest = base.strip_prefix("https://")?;
-    Some(format!("wss://{rest}/control"))
+    http_base_to_control_ws_url(&base)
+}
+
+fn http_base_to_control_ws_url(base: &str) -> Option<String> {
+    let base = base.trim().trim_end_matches('/');
+    if let Some(rest) = base.strip_prefix("https://") {
+        if rest.is_empty() {
+            return None;
+        }
+        return Some(format!("wss://{}/control", rest));
+    }
+    if let Some(rest) = base.strip_prefix("http://") {
+        if rest.is_empty() {
+            return None;
+        }
+        return Some(format!("ws://{}/control", rest));
+    }
+    None
+}
+
+#[cfg(test)]
+mod control_ws_url_tests {
+    use super::http_base_to_control_ws_url;
+
+    #[test]
+    fn lan_http_maps_to_ws() {
+        assert_eq!(
+            http_base_to_control_ws_url("http://192.168.1.5:4681").as_deref(),
+            Some("ws://192.168.1.5:4681/control")
+        );
+    }
+
+    #[test]
+    fn public_https_maps_to_wss() {
+        assert_eq!(
+            http_base_to_control_ws_url("https://osulink.peyton-clark.com").as_deref(),
+            Some("wss://osulink.peyton-clark.com/control")
+        );
+    }
+
+    #[test]
+    fn https_with_port_maps_to_wss() {
+        assert_eq!(
+            http_base_to_control_ws_url("https://example.com:4681").as_deref(),
+            Some("wss://example.com:4681/control")
+        );
+    }
 }
