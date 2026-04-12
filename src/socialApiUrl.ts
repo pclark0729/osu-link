@@ -1,7 +1,8 @@
 import { DEFAULT_PARTY_WS_URL, HOSTED_PARTY_WS_URL } from "./constants";
 
 /**
- * Match Rust `settings::party_ws_to_http_base` / `resolve_social_api_base` for display-only hints.
+ * Match Rust `settings::party_ws_to_http_base` / `resolve_social_api_base_from_saved_settings` for display-only hints.
+ * (Runtime also tries LAN mDNS via `party_discovery::resolve_social_api_base_effective`.)
  */
 export function partyWsToHttpBase(ws: string): string | null {
   const w = ws.trim();

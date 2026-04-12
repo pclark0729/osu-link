@@ -102,23 +102,23 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
 }
 
 /// Default hosted party WebSocket (must match frontend `HOSTED_PARTY_WS_URL` when user has no saved URL).
-const DEFAULT_PARTY_WS_FALLBACK: &str = "wss://osulink.peyton-clark.com";
+pub(crate) const DEFAULT_PARTY_WS_FALLBACK: &str = "wss://osulink.peyton-clark.com";
 
-/// HTTPS base URL for the self-hosted social API (`/api/v1/...`).
-pub fn resolve_social_api_base(settings: &Settings) -> Option<String> {
+/// Party / social API base derived only from explicit settings (no hosted default, no LAN discovery).
+pub fn resolve_social_api_base_from_saved_settings(settings: &Settings) -> Option<String> {
     if let Some(ref u) = settings.social_api_base_url {
         let t = u.trim();
         if !t.is_empty() {
             return Some(t.trim_end_matches('/').to_string());
         }
     }
-    let ws = settings
-        .party_server_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(DEFAULT_PARTY_WS_FALLBACK);
+    let ws = settings.party_server_url.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
     party_ws_to_http_base(ws)
+}
+
+/// Hosted HTTPS API base when the user has not configured a party URL (used if mDNS finds nothing).
+pub(crate) fn default_hosted_social_api_base() -> String {
+    party_ws_to_http_base(DEFAULT_PARTY_WS_FALLBACK).expect("default party ws maps to https")
 }
 
 fn party_ws_to_http_base(ws: &str) -> Option<String> {
@@ -149,21 +149,7 @@ fn party_ws_to_http_base(ws: &str) -> Option<String> {
     None
 }
 
-/// WebSocket URL for Discord remote control (`ws://` or `wss://` host[:port]/control).
-/// Uses the same base as [`resolve_social_api_base`]: `http://…` → `ws://…`, `https://…` → `wss://…`
-/// so LAN party URLs (`ws://pi:4680` → HTTP API on :4681) match party-server without NAT hairpin.
-pub fn resolve_discord_control_ws_url(settings: &Settings) -> Option<String> {
-    if let Some(ref u) = settings.discord_control_ws_url {
-        let t = u.trim();
-        if !t.is_empty() {
-            return Some(t.trim_end_matches('/').to_string());
-        }
-    }
-    let base = resolve_social_api_base(settings)?;
-    http_base_to_control_ws_url(&base)
-}
-
-fn http_base_to_control_ws_url(base: &str) -> Option<String> {
+pub(crate) fn http_base_to_control_ws_url(base: &str) -> Option<String> {
     let base = base.trim().trim_end_matches('/');
     if let Some(rest) = base.strip_prefix("https://") {
         if rest.is_empty() {

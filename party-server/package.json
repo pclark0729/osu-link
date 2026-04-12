@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.7.0",
+    "bonjour-service": "^1.2.1",
     "ws": "^8.18.0"
   },
   "engines": {

@@ -6,8 +6,10 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import Bonjour from "bonjour-service";
 import { WebSocketServer } from "ws";
 
 import { handleSocialApi } from "./api.mjs";
@@ -644,6 +646,41 @@ wss.on("connection", (ws, req) => {
 /** @type {http.Server | null} */
 let healthServer = null;
 
+/** @type {import("bonjour-service").default | null} */
+let bonjourInstance = null;
+
+function startMdnsAdvertisement() {
+  if (process.env.DISABLE_MDNS === "1") {
+    log.info("mDNS: advertisement disabled (DISABLE_MDNS=1)");
+    return;
+  }
+  const advertise =
+    HEALTH_HOST === "0.0.0.0" || process.env.MDNS_ADVERTISE === "1";
+  if (!advertise) {
+    log.info(
+      "mDNS: skipped — set HEALTH_HOST=0.0.0.0 (or MDNS_ADVERTISE=1) to advertise LAN discovery",
+    );
+    return;
+  }
+  try {
+    bonjourInstance = new Bonjour();
+    const safeHost = os.hostname().replace(/[^a-zA-Z0-9-]/g, "-") || "party";
+    const name = `osu-link-${safeHost}`;
+    bonjourInstance.publish({
+      name,
+      type: "osu-link-party",
+      port: HEALTH_PORT,
+      protocol: "tcp",
+      txt: { v: "1" },
+    });
+    log.info(
+      `mDNS: _osu-link-party._tcp on port ${HEALTH_PORT} (instance "${name}") — osu-link discovers LAN API automatically`,
+    );
+  } catch (e) {
+    log.warn(`mDNS: publish failed: ${/** @type {Error} */ (e).message}`);
+  }
+}
+
 if (HEALTH_PORT > 0) {
   healthServer = http.createServer((req, res) => {
     const fullUrl = req.url ?? "/";
@@ -746,6 +783,7 @@ if (HEALTH_PORT > 0) {
     if (controlRelay) {
       log.info(`Discord control WebSocket upgrade path ws://${HEALTH_HOST}:${HEALTH_PORT}/control`);
     }
+    startMdnsAdvertisement();
   });
 } else {
   log.info("Health HTTP disabled (HEALTH_PORT=0 or DISABLE_HEALTH=1)");
@@ -786,6 +824,16 @@ function shutdown(signal) {
     } catch (e) {
       log.warn(`sqlite close: ${/** @type {Error} */ (e).message}`);
     }
+  }
+
+  if (bonjourInstance) {
+    try {
+      bonjourInstance.unpublishAll();
+      bonjourInstance.destroy();
+    } catch (e) {
+      log.warn(`mDNS shutdown: ${/** @type {Error} */ (e).message}`);
+    }
+    bonjourInstance = null;
   }
 
   if (healthServer) {

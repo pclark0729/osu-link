@@ -10,9 +10,10 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::osu_api;
-use crate::settings::{
-    load_settings, resolve_discord_control_ws_url, resolve_social_api_base, save_settings, Settings,
+use crate::party_discovery::{
+    resolve_discord_control_ws_url_effective, resolve_social_api_base_effective,
 };
+use crate::settings::{load_settings, save_settings, Settings};
 
 const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -47,7 +48,8 @@ fn emit_status(app: &AppHandle, connected: bool) {
 /// Start pairing: register `tokenHash` on relay and persist session token locally.
 pub async fn prepare_pairing() -> Result<Value, String> {
     let mut s = load_settings();
-    let base = resolve_social_api_base(&s)
+    let base = resolve_social_api_base_effective(&s)
+        .await
         .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
     let token = gen_session_token();
     let code = gen_pair_code();
@@ -81,7 +83,8 @@ pub async fn pairing_status() -> Result<Value, String> {
         .as_deref()
         .filter(|x| !x.is_empty())
         .ok_or_else(|| "No session token".to_string())?;
-    let base = resolve_social_api_base(&s)
+    let base = resolve_social_api_base_effective(&s)
+        .await
         .ok_or_else(|| "Set Party server URL or Social API base URL.".to_string())?;
     let url = format!(
         "{}/api/v1/discord-control/status",
@@ -106,7 +109,7 @@ pub async fn revoke_session() -> Result<(), String> {
         save_settings(&s)?;
         return Ok(());
     };
-    if let Some(base) = resolve_social_api_base(&s) {
+    if let Some(base) = resolve_social_api_base_effective(&s).await {
         let url = format!(
             "{}/api/v1/discord-control/revoke",
             base.trim_end_matches('/')
@@ -234,7 +237,9 @@ async fn one_connection(app: AppHandle, settings: &Settings) -> Result<(), Strin
         .as_deref()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "no token".to_string())?;
-    let ws_url = resolve_discord_control_ws_url(settings).ok_or_else(|| "no ws url".to_string())?;
+    let ws_url = resolve_discord_control_ws_url_effective(settings)
+        .await
+        .ok_or_else(|| "no ws url".to_string())?;
 
     let mut request = ws_url
         .as_str()

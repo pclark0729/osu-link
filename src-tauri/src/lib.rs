@@ -1,6 +1,7 @@
 mod beatmap_avg_pp;
 mod collections;
 mod discord_control;
+mod party_discovery;
 mod import;
 mod local_library;
 mod oauth;
@@ -13,7 +14,7 @@ use collections::{load_collection_store, save_collection_store, CollectionStore}
 use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
-use settings::{load_settings, resolve_social_api_base, save_settings, Settings};
+use settings::{load_settings, save_settings, Settings};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -292,7 +293,8 @@ async fn fresh_token() -> Result<(Settings, String), String> {
 #[tauri::command]
 async fn social_api_get(path: String) -> Result<Value, String> {
     let (s, token) = fresh_token().await?;
-    let base = resolve_social_api_base(&s)
+    let base = crate::party_discovery::resolve_social_api_base_effective(&s)
+        .await
         .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
     let p = path.trim();
     let p = if p.starts_with('/') { p } else { return Err("Path must start with /".into()) };
@@ -316,7 +318,8 @@ async fn social_api_get(path: String) -> Result<Value, String> {
 #[tauri::command]
 async fn social_api_post(path: String, body: Option<Value>) -> Result<Value, String> {
     let (s, token) = fresh_token().await?;
-    let base = resolve_social_api_base(&s)
+    let base = crate::party_discovery::resolve_social_api_base_effective(&s)
+        .await
         .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
     let p = path.trim();
     let p = if p.starts_with('/') { p } else { return Err("Path must start with /".into()) };
@@ -344,7 +347,8 @@ async fn social_api_post(path: String, body: Option<Value>) -> Result<Value, Str
 #[tauri::command]
 async fn social_api_delete(path: String) -> Result<Value, String> {
     let (s, token) = fresh_token().await?;
-    let base = resolve_social_api_base(&s)
+    let base = crate::party_discovery::resolve_social_api_base_effective(&s)
+        .await
         .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
     let p = path.trim();
     let p = if p.starts_with('/') { p } else { return Err("Path must start with /".into()) };
