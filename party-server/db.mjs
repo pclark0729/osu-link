@@ -155,6 +155,11 @@ export function openDatabase(dbPath) {
   } catch {
     /* column already exists */
   }
+  try {
+    db.exec(`ALTER TABLE async_battles ADD COLUMN relative_pp INTEGER NOT NULL DEFAULT 0`);
+  } catch {
+    /* column already exists */
+  }
   return db;
 }
 

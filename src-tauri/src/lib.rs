@@ -285,6 +285,16 @@ fn save_collections_cmd(store: CollectionStore) -> Result<(), String> {
     save_collection_store(&store)
 }
 
+fn social_api_http_error(status: reqwest::StatusCode, text: String) -> String {
+    let mut s = format!("social API {status}: {text}");
+    if status.as_u16() == 426 {
+        s.push_str(
+            " — REST uses port 4681 (4680 is WebSocket only). Set Social API base to http://…:4681.",
+        );
+    }
+    s
+}
+
 async fn fresh_token() -> Result<(Settings, String), String> {
     let s = load_settings();
     if s.client_id.is_empty() || s.client_secret.is_empty() {
@@ -320,7 +330,7 @@ async fn social_api_get(path: String) -> Result<Value, String> {
     let status = res.status();
     let text = res.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("social API {status}: {text}"));
+        return Err(social_api_http_error(status, text));
     }
     serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"))
 }
@@ -346,7 +356,7 @@ async fn social_api_post(path: String, body: Option<Value>) -> Result<Value, Str
     let status = res.status();
     let text = res.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("social API {status}: {text}"));
+        return Err(social_api_http_error(status, text));
     }
     if text.trim().is_empty() {
         return Ok(Value::Null);
@@ -374,7 +384,7 @@ async fn social_api_delete(path: String) -> Result<Value, String> {
     let status = res.status();
     let text = res.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("social API {status}: {text}"));
+        return Err(social_api_http_error(status, text));
     }
     if text.trim().is_empty() {
         return Ok(Value::Null);

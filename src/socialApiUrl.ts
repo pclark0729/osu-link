@@ -4,6 +4,20 @@ import { DEFAULT_PARTY_WS_URL, HOSTED_PARTY_WS_URL } from "./constants";
  * Match Rust `settings::party_ws_to_http_base` / `resolve_social_api_base_from_saved_settings` for display-only hints.
  * (Runtime also tries LAN mDNS via `party_discovery::resolve_social_api_base_effective`.)
  */
+/** If Social API base mistakenly uses party WS port 4680, map to REST port 4681 (matches Rust `normalize_social_api_http_base_party_port`). */
+export function normalizeSocialApiHttpBasePartyPort(base: string): string {
+  const b = base.trim().replace(/\/$/, "");
+  const lower = b.toLowerCase();
+  if (lower.endsWith(":4680")) {
+    return `${b.slice(0, -":4680".length)}:4681`;
+  }
+  const idx = lower.indexOf(":4680/");
+  if (idx !== -1) {
+    return `${b.slice(0, idx)}:4681${b.slice(idx + 5)}`;
+  }
+  return b;
+}
+
 export function partyWsToHttpBase(ws: string): string | null {
   const w = ws.trim();
   if (!w) return null;
@@ -40,7 +54,7 @@ export function resolveSocialApiBaseUrl(
 ): string | null {
   const override = socialApiBaseUrl?.trim();
   if (override) {
-    return override.replace(/\/$/, "");
+    return normalizeSocialApiHttpBasePartyPort(override);
   }
   const ws = (partyServerUrl?.trim() || HOSTED_PARTY_WS_URL || DEFAULT_PARTY_WS_URL).trim();
   return partyWsToHttpBase(ws);

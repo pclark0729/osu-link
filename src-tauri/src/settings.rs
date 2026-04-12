@@ -158,12 +158,27 @@ pub fn settings_with_draft_urls(
     s
 }
 
+/// If the user pasted the party **WebSocket** port into the Social API HTTP field, requests hit the WS
+/// listener and get **426 Upgrade Required**. Map `:4680` → `:4681` like `party_ws_to_http_base`.
+fn normalize_social_api_http_base_party_port(base: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    let lower = base.to_ascii_lowercase();
+    if lower.ends_with(":4680") {
+        let n = base.len() - ":4680".len();
+        return format!("{}:4681", &base[..n]);
+    }
+    if let Some(pos) = lower.find(":4680/") {
+        return format!("{}:4681{}", &base[..pos], &base[pos + 5..]);
+    }
+    base.to_string()
+}
+
 /// Party / social API base derived only from explicit settings (no hosted default, no LAN discovery).
 pub fn resolve_social_api_base_from_saved_settings(settings: &Settings) -> Option<String> {
     if let Some(ref u) = settings.social_api_base_url {
         let t = u.trim();
         if !t.is_empty() {
-            return Some(t.trim_end_matches('/').to_string());
+            return Some(normalize_social_api_http_base_party_port(t));
         }
     }
     let ws = settings.party_server_url.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
@@ -222,7 +237,27 @@ pub(crate) fn http_base_to_control_ws_url(base: &str) -> Option<String> {
 
 #[cfg(test)]
 mod control_ws_url_tests {
-    use super::http_base_to_control_ws_url;
+    use super::{http_base_to_control_ws_url, normalize_social_api_http_base_party_port};
+
+    #[test]
+    fn mistaken_ws_port_in_http_base_maps_to_api_port() {
+        assert_eq!(
+            normalize_social_api_http_base_party_port("http://127.0.0.1:4680"),
+            "http://127.0.0.1:4681"
+        );
+        assert_eq!(
+            normalize_social_api_http_base_party_port("HTTPS://LAN:4680/"),
+            "HTTPS://LAN:4681"
+        );
+        assert_eq!(
+            normalize_social_api_http_base_party_port("http://192.168.1.5:4680/foo"),
+            "http://192.168.1.5:4681/foo"
+        );
+        assert_eq!(
+            normalize_social_api_http_base_party_port("http://127.0.0.1:4681"),
+            "http://127.0.0.1:4681"
+        );
+    }
 
     #[test]
     fn lan_http_maps_to_ws() {

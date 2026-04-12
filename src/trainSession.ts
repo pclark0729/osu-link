@@ -7,6 +7,9 @@ import { TRAINING_SESSION_KEY } from "./trainHistory";
 
 export const TRAINING_SESSION_VERSION = 1 as const;
 
+/** Subjective difficulty vs the current map; nudges the auto star band for the next picks. */
+export type TrainDifficultyFeel = "too_easy" | "too_hard";
+
 export interface TrainQueueItem {
   beatmapsetId: number;
   beatmapId: number;
@@ -34,6 +37,8 @@ export interface TrainSessionStateV1 {
   starMax: number;
   rampStep: number;
   usedBeatmapsetIds: number[];
+  /** Optional: applies after pass/fail band update for the next auto-queue fetches. */
+  difficultyFeel?: TrainDifficultyFeel | null;
   /** Custom set items when source is custom — for export context */
   customItems?: SharedCollectionItem[];
 }

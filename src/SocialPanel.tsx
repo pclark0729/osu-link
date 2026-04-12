@@ -7,6 +7,7 @@ import {
   playBeatmapIdFromScore,
   scoreBeatmapsetId,
 } from "./challengeScoring";
+import { osuRankedStarRangeFromBeatmapset } from "./beatmapSetStarRange";
 import { notifyDesktop } from "./desktopNotify";
 import { BattlesPanel } from "./BattlesPanel";
 import { normalizeAccuracy } from "./trainBaseline";
@@ -248,9 +249,16 @@ export function SocialPanel({
 
   const [challenges, setChallenges] = useState<unknown[]>([]);
   const [challengeMapQuery, setChallengeMapQuery] = useState("");
-  const [challengeMapResults, setChallengeMapResults] = useState<Array<{ id: number; title: string; artist: string }>>([]);
+  const [challengeMapResults, setChallengeMapResults] = useState<
+    Array<{ id: number; title: string; artist: string; starRange: string | null }>
+  >([]);
   const [challengeMapSearching, setChallengeMapSearching] = useState(false);
-  const [challengePick, setChallengePick] = useState<{ id: number; title: string; artist: string } | null>(null);
+  const [challengePick, setChallengePick] = useState<{
+    id: number;
+    title: string;
+    artist: string;
+    starRange: string | null;
+  } | null>(null);
   const [challengeSelectValue, setChallengeSelectValue] = useState("");
   const [chDeadlinePreset, setChDeadlinePreset] = useState("");
   const [chDeadlineCustom, setChDeadlineCustom] = useState("");
@@ -587,7 +595,7 @@ export function SocialPanel({
             input: { q, s: "ranked", sort: "plays_desc", m: 0 },
           });
           const sets = (res.beatmapsets as unknown[]) || [];
-          const out: Array<{ id: number; title: string; artist: string }> = [];
+          const out: Array<{ id: number; title: string; artist: string; starRange: string | null }> = [];
           for (const x of sets.slice(0, 12)) {
             const r = asRecord(x);
             const id = Number(r.id);
@@ -596,6 +604,7 @@ export function SocialPanel({
               id,
               title: String(r.title ?? ""),
               artist: String(r.artist ?? ""),
+              starRange: osuRankedStarRangeFromBeatmapset(r),
             });
           }
           setChallengeMapResults(out);
@@ -965,9 +974,10 @@ export function SocialPanel({
     const hint = challengeMapSearching ? "Searching…" : "Search below, then choose a set…";
     const opts: NeuSelectOption[] = [{ value: "", label: hint }];
     for (const m of challengeMapResults) {
+      const starBit = m.starRange ? ` · ${m.starRange}` : "";
       opts.push({
         value: String(m.id),
-        label: `${m.artist} — ${m.title} (#${m.id})`,
+        label: `${m.artist} — ${m.title} (#${m.id})${starBit}`,
       });
     }
     return opts;
@@ -1336,7 +1346,11 @@ export function SocialPanel({
                     <strong>{challengePick.title}</strong>
                     <span className="battle-selected-dash"> — </span>
                     {challengePick.artist}
-                    <span className="hint battle-selected-set"> · set {challengePick.id}</span>
+                    <span className="hint battle-selected-set">
+                      {" "}
+                      · set {challengePick.id}
+                      {challengePick.starRange ? ` · ${challengePick.starRange}` : ""}
+                    </span>
                   </p>
                 </div>
               )}

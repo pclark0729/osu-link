@@ -36,6 +36,20 @@ function pair(a, b) {
 }
 
 /**
+ * Same ordering as challenge standings: weighted (finite rank_value) before unweighted; then higher rank_value; tie-break score.
+ * @param {Record<string, unknown>} a
+ * @param {Record<string, unknown>} b
+ * @returns {number}
+ */
+function compareChallengeLikeScores(a, b) {
+  const aW = a.rank_value != null && Number.isFinite(Number(a.rank_value));
+  const bW = b.rank_value != null && Number.isFinite(Number(b.rank_value));
+  if (aW !== bW) return aW ? -1 : 1;
+  if (aW && bW) return Number(b.rank_value) - Number(a.rank_value);
+  return Number(b.score) - Number(a.score);
+}
+
+/**
  * @param {Record<string, unknown>} r
  */
 function mapBattleRow(r) {
@@ -460,10 +474,11 @@ export async function handleSocialApi(db, req, res, method, pathname) {
           artist: String(body.display.artist ?? ""),
         });
       }
+      const relativePp = Boolean(body?.relativePp) ? 1 : 0;
       const info = db
         .prepare(
-          `INSERT INTO async_battles (creator_osu_id, opponent_osu_id, beatmapset_id, beatmap_id, window_start, window_end, state, created_at, display_json)
-           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+          `INSERT INTO async_battles (creator_osu_id, opponent_osu_id, beatmapset_id, beatmap_id, window_start, window_end, state, created_at, display_json, relative_pp)
+           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
         )
         .run(
           me,
@@ -474,6 +489,7 @@ export async function handleSocialApi(db, req, res, method, pathname) {
           windowEnd,
           now,
           displayJson,
+          relativePp,
         );
       const battleId = info.lastInsertRowid;
       insertActivity(db, me, "battle_created", { battleId, opponentOsuId: opponent, beatmapsetId });
@@ -488,17 +504,29 @@ export async function handleSocialApi(db, req, res, method, pathname) {
         )
         .all(me, me);
       const ids = rows.map((r) => r.id);
-      /** @type {Map<number, Array<{ user_osu_id: number, score: number }>>} */
+      /** @type {Map<number, Array<Record<string, unknown>>>} */
       const scoresByBattle = new Map();
       if (ids.length > 0) {
         const ph = ids.map(() => "?").join(",");
         const scoreRows = db
-          .prepare(`SELECT battle_id, user_osu_id, score FROM score_submissions WHERE battle_id IN (${ph})`)
+          .prepare(
+            `SELECT battle_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted
+             FROM score_submissions WHERE battle_id IN (${ph})`,
+          )
           .all(...ids);
         for (const s of scoreRows) {
           const bid = s.battle_id;
           if (!scoresByBattle.has(bid)) scoresByBattle.set(bid, []);
-          scoresByBattle.get(bid).push({ user_osu_id: s.user_osu_id, score: s.score });
+          scoresByBattle.get(bid).push({
+            user_osu_id: s.user_osu_id,
+            score: s.score,
+            rank_value: s.rank_value,
+            pp: s.pp,
+            stars: s.stars,
+            play_beatmap_id: s.play_beatmap_id,
+            baseline_pp_per_star: s.baseline_pp_per_star,
+            is_unweighted: s.is_unweighted,
+          });
         }
       }
       const battles = rows.map((r) => ({
@@ -538,10 +566,37 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       }
       const existing = db.prepare(`SELECT 1 FROM score_submissions WHERE battle_id = ? AND user_osu_id = ?`).get(id, me);
       if (existing) return json(res, 409, { error: "already_submitted" });
+      const rankValue = body?.rankValue != null ? Number(body.rankValue) : null;
+      const pp = body?.pp != null ? Number(body.pp) : null;
+      const stars = body?.stars != null ? Number(body.stars) : null;
+      const playBeatmapId = body?.playBeatmapId != null ? Number(body.playBeatmapId) : null;
+      const baselinePpPerStar = body?.baselinePpPerStar != null ? Number(body.baselinePpPerStar) : null;
+      const isUnweighted = Boolean(body?.isUnweighted);
+      const rv =
+        !isUnweighted && rankValue != null && Number.isFinite(rankValue) ? rankValue : null;
+      const ppIns = pp != null && Number.isFinite(pp) ? pp : null;
+      const starsIns = stars != null && Number.isFinite(stars) ? stars : null;
+      const bmid = playBeatmapId != null && Number.isFinite(playBeatmapId) ? Math.round(playBeatmapId) : null;
+      const baselineIns =
+        baselinePpPerStar != null && Number.isFinite(baselinePpPerStar) ? baselinePpPerStar : null;
       db.prepare(
-        `INSERT INTO score_submissions (battle_id, challenge_id, user_osu_id, score, mods, submitted_at)
-         VALUES (?, NULL, ?, ?, ?, ?)`,
-      ).run(id, me, Math.round(score), Math.round(mods), now);
+        `INSERT INTO score_submissions (
+           battle_id, challenge_id, user_osu_id, score, mods, submitted_at,
+           pp, stars, play_beatmap_id, rank_value, baseline_pp_per_star, is_unweighted
+         ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        me,
+        Math.round(score),
+        Math.round(mods),
+        now,
+        ppIns,
+        starsIns,
+        bmid,
+        rv,
+        baselineIns,
+        isUnweighted ? 1 : 0,
+      );
       insertActivity(db, me, "battle_score", { battleId: id, score: Math.round(score) });
       finalizeBattle(db, id);
       const b2 = db.prepare(`SELECT * FROM async_battles WHERE id = ?`).get(id);
@@ -614,7 +669,9 @@ function insertActivity(db, actorOsuId, type, payloadObj) {
 function finalizeBattle(db, battleId) {
   const b = db.prepare(`SELECT * FROM async_battles WHERE id = ?`).get(battleId);
   if (!b || b.state === "closed") return;
-  const scores = db.prepare(`SELECT user_osu_id, score FROM score_submissions WHERE battle_id = ?`).all(battleId);
+  const scores = db
+    .prepare(`SELECT user_osu_id, score, rank_value, is_unweighted FROM score_submissions WHERE battle_id = ?`)
+    .all(battleId);
   const now = Date.now();
   const both =
     scores.some((s) => s.user_osu_id === b.creator_osu_id) && scores.some((s) => s.user_osu_id === b.opponent_osu_id);
@@ -625,9 +682,15 @@ function finalizeBattle(db, battleId) {
     return;
   }
   let winner = null;
+  const relativePp = Number(b.relative_pp) === 1;
   if (scores.length > 0) {
-    const best = scores.reduce((a, s) => (s.score > a.score ? s : a));
-    winner = best.user_osu_id;
+    if (relativePp) {
+      const sorted = [...scores].sort(compareChallengeLikeScores);
+      winner = sorted[0].user_osu_id;
+    } else {
+      const best = scores.reduce((a, s) => (s.score > a.score ? s : a));
+      winner = best.user_osu_id;
+    }
   }
   db.prepare(`UPDATE async_battles SET state = 'closed', winner_osu_id = ? WHERE id = ?`).run(winner, battleId);
   insertActivity(db, b.creator_osu_id, "battle_finished", {

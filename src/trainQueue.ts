@@ -11,7 +11,7 @@ import {
   type Mode,
   type SearchInput,
 } from "./searchTypes";
-import type { TrainQueueItem } from "./trainSession";
+import type { TrainDifficultyFeel, TrainQueueItem } from "./trainSession";
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -232,4 +232,49 @@ export function softenStarBand(starMin: number, starMax: number): { starMin: num
   const nextMin = Math.max(1, starMin - 0.15);
   const nextMax = Math.max(nextMin + 0.25, starMax - 0.1);
   return { starMin: Math.round(nextMin * 10) / 10, starMax: Math.round(nextMax * 10) / 10 };
+}
+
+const FEEL_NUDGE = 0.275;
+const MIN_BAND_WIDTH = 0.25;
+const STAR_FLOOR = 1;
+const STAR_CEIL = 9.99;
+
+function roundStar(x: number): number {
+  return Math.round(x * 10) / 10;
+}
+
+/**
+ * Shift the star search band after the user rates the current map too easy or too hard.
+ * Keeps at least MIN_BAND_WIDTH between min and max; clamps to [STAR_FLOOR, STAR_CEIL].
+ */
+export function applyDifficultyFeelToBand(
+  starMin: number,
+  starMax: number,
+  feel: TrainDifficultyFeel,
+): { starMin: number; starMax: number } {
+  const d = feel === "too_easy" ? FEEL_NUDGE : -FEEL_NUDGE;
+  let nextMin = starMin + d;
+  let nextMax = starMax + d;
+
+  if (nextMax > STAR_CEIL) {
+    const overflow = nextMax - STAR_CEIL;
+    nextMax = STAR_CEIL;
+    nextMin -= overflow;
+  }
+  if (nextMin < STAR_FLOOR) {
+    const under = STAR_FLOOR - nextMin;
+    nextMin = STAR_FLOOR;
+    nextMax += under;
+  }
+  nextMax = Math.min(STAR_CEIL, nextMax);
+  nextMin = Math.max(STAR_FLOOR, nextMin);
+
+  if (nextMax < nextMin + MIN_BAND_WIDTH) {
+    nextMax = Math.min(STAR_CEIL, nextMin + MIN_BAND_WIDTH);
+  }
+  if (nextMax - nextMin < MIN_BAND_WIDTH) {
+    nextMin = Math.max(STAR_FLOOR, nextMax - MIN_BAND_WIDTH);
+  }
+
+  return { starMin: roundStar(nextMin), starMax: roundStar(nextMax) };
 }

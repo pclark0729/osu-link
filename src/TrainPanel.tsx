@@ -5,6 +5,7 @@ import { computeTrainingBaseline } from "./trainBaseline";
 import { appendMapOutcome, appendSessionSummary } from "./trainHistory";
 import { detectSlotProgress } from "./trainProgress";
 import {
+  applyDifficultyFeelToBand,
   buildAutoQueueChunk,
   buildQueueFromCustomItems,
   nextStarBand,
@@ -16,6 +17,7 @@ import {
   loadTrainSession,
   newSessionId,
   saveTrainSession,
+  type TrainDifficultyFeel,
   type TrainQueueItem,
   type TrainSessionStateV1,
 } from "./trainSession";
@@ -35,6 +37,15 @@ const POLL_MS = 22000;
 const DEFAULT_ACC = 90;
 const QUEUE_CHUNK = 8;
 const EXTEND_THRESHOLD = 3;
+
+function bandAfterFeel(
+  starMin: number,
+  starMax: number,
+  feel: TrainDifficultyFeel | null | undefined,
+): { starMin: number; starMax: number } {
+  if (feel == null) return { starMin, starMax };
+  return applyDifficultyFeelToBand(starMin, starMax, feel);
+}
 
 function bumpHistoryEvent(): void {
   window.dispatchEvent(new CustomEvent("osu-link-training-history"));
@@ -273,7 +284,8 @@ export function TrainPanel({
           if (s.source === "auto") {
             const exclude = new Set(s.usedBeatmapsetIds);
             const band = nextStarBand(s.starMin, s.starMax, passAcc, s.accThreshold);
-            const more = await buildAutoQueueChunk(s.mode, band.starMin, band.starMax, exclude, QUEUE_CHUNK);
+            const felt = bandAfterFeel(band.starMin, band.starMax, s.difficultyFeel);
+            const more = await buildAutoQueueChunk(s.mode, felt.starMin, felt.starMax, exclude, QUEUE_CHUNK);
             more.forEach((m) => exclude.add(m.beatmapsetId));
             if (more.length === 0) {
               endSession(s, "complete");
@@ -286,9 +298,10 @@ export function TrainPanel({
               queue: [...s.queue, ...more],
               currentIndex: nextIdx,
               slotStartedAtMs: now,
-              starMin: band.starMin,
-              starMax: band.starMax,
+              starMin: felt.starMin,
+              starMax: felt.starMax,
               rampStep: band.rampStep,
+              difficultyFeel: null,
               usedBeatmapsetIds: [...exclude],
             });
             void notifyDesktop("osu-link Train", `Passed. Next: ${first.title}`);
@@ -305,8 +318,9 @@ export function TrainPanel({
         let rampStep = s.rampStep;
         if (s.source === "auto") {
           const band = nextStarBand(s.starMin, s.starMax, passAcc, s.accThreshold);
-          starMin = band.starMin;
-          starMax = band.starMax;
+          const felt = bandAfterFeel(band.starMin, band.starMax, s.difficultyFeel);
+          starMin = felt.starMin;
+          starMax = felt.starMax;
           rampStep = band.rampStep;
         }
 
@@ -318,6 +332,7 @@ export function TrainPanel({
           starMin,
           starMax,
           rampStep,
+          difficultyFeel: null,
         });
         void notifyDesktop("osu-link Train", `Passed. Next: ${nextItem.title}`);
         void openOsuBeatmap(nextItem.beatmapId);
@@ -364,12 +379,14 @@ export function TrainPanel({
           bumpHistoryEvent();
           if (session.source === "auto") {
             const soft = softenStarBand(session.starMin, session.starMax);
+            const felt = bandAfterFeel(soft.starMin, soft.starMax, session.difficultyFeel);
             setSession((prev) =>
               prev
                 ? {
                     ...prev,
-                    starMin: soft.starMin,
-                    starMax: soft.starMax,
+                    starMin: felt.starMin,
+                    starMax: felt.starMax,
+                    difficultyFeel: null,
                   }
                 : prev,
             );
@@ -446,7 +463,7 @@ export function TrainPanel({
       q[session.currentIndex] = rep;
       const used = [...new Set([...session.usedBeatmapsetIds, rep.beatmapsetId])];
       const now = Date.now();
-      setSession({ ...session, queue: q, usedBeatmapsetIds: used, slotStartedAtMs: now });
+      setSession({ ...session, queue: q, usedBeatmapsetIds: used, slotStartedAtMs: now, difficultyFeel: null });
       pushToast("info", "Swapped current map.");
       void openOsuBeatmap(rep.beatmapId);
     } catch (e) {
@@ -514,6 +531,7 @@ export function TrainPanel({
             queue: q,
             usedBeatmapsetIds: used,
             slotStartedAtMs: Date.now(),
+            difficultyFeel: null,
           });
           setPickResults([]);
           pushToast("success", "Current map updated.");
@@ -671,6 +689,47 @@ export function TrainPanel({
               )}
             </p>
           </div>
+          {session.source === "auto" && (
+            <div className="train-feel-row">
+              <p className="hint">This map feels too easy or too hard? Nudges the ★ band used for the next auto picks (toggle to clear).</p>
+              <div className="train-actions-row">
+                <button
+                  type="button"
+                  className={session.difficultyFeel === "too_easy" ? "primary" : "secondary"}
+                  disabled={busy}
+                  onClick={() =>
+                    setSession((prev) =>
+                      prev && prev.source === "auto"
+                        ? {
+                            ...prev,
+                            difficultyFeel: prev.difficultyFeel === "too_easy" ? null : "too_easy",
+                          }
+                        : prev,
+                    )
+                  }
+                >
+                  Too easy
+                </button>
+                <button
+                  type="button"
+                  className={session.difficultyFeel === "too_hard" ? "primary" : "secondary"}
+                  disabled={busy}
+                  onClick={() =>
+                    setSession((prev) =>
+                      prev && prev.source === "auto"
+                        ? {
+                            ...prev,
+                            difficultyFeel: prev.difficultyFeel === "too_hard" ? null : "too_hard",
+                          }
+                        : prev,
+                    )
+                  }
+                >
+                  Too hard
+                </button>
+              </div>
+            </div>
+          )}
           <div className="train-actions-row">
             <button type="button" className="secondary" onClick={() => void openOsuBeatmap(current.beatmapId)}>
               Open in osu!
