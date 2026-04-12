@@ -4544,6 +4544,85 @@ button.social-tab {
   margin-top: 0.85rem;
 }
 
+.battles-panel__modal--wide {
+  width: min(32rem, 100%);
+  max-height: min(85vh, 40rem);
+  overflow: auto;
+}
+
+.battles-panel__auto-submit {
+  margin-top: 0.5rem;
+  font-size: 0.88rem;
+}
+
+.battles-panel__fighters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.35rem 0.75rem;
+  margin: 0.25rem 0 0;
+}
+
+.battles-panel__fighter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 8rem;
+}
+
+.battles-panel__fighter-name {
+  font-weight: 600;
+}
+
+.battles-panel__fighter-sub {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text-muted, #888);
+}
+
+.battles-panel__vs {
+  align-self: center;
+  flex: 0 0 auto;
+}
+
+.battles-panel__card-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0;
+}
+
+.battles-panel__detail-body {
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.battles-panel__detail-map {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.battles-panel__detail-facts {
+  margin: 0.5rem 0;
+  padding-left: 1.1rem;
+}
+
+.battles-panel__detail-scores-h {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.battles-panel__detail-scores {
+  margin: 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+}
+
+.battles-panel__detail-scores li {
+  margin-bottom: 0.5rem;
+}
+
 /* —— Friend leaderboard —— */
 .social-leaderboard-section {
   display: flex;

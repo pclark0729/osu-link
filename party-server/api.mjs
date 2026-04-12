@@ -497,7 +497,16 @@ export async function handleSocialApi(db, req, res, method, pathname) {
     }
 
     if (method === "GET" && pathname === "/api/v1/battles") {
-      const rows = db
+      let rows = db
+        .prepare(
+          `SELECT * FROM async_battles WHERE creator_osu_id = ? OR opponent_osu_id = ?
+           ORDER BY created_at DESC LIMIT 50`,
+        )
+        .all(me, me);
+      for (const r of rows) {
+        finalizeBattle(db, r.id);
+      }
+      rows = db
         .prepare(
           `SELECT * FROM async_battles WHERE creator_osu_id = ? OR opponent_osu_id = ?
            ORDER BY created_at DESC LIMIT 50`,
@@ -510,7 +519,7 @@ export async function handleSocialApi(db, req, res, method, pathname) {
         const ph = ids.map(() => "?").join(",");
         const scoreRows = db
           .prepare(
-            `SELECT battle_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted
+            `SELECT battle_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted, submitted_at, mods
              FROM score_submissions WHERE battle_id IN (${ph})`,
           )
           .all(...ids);
@@ -526,6 +535,8 @@ export async function handleSocialApi(db, req, res, method, pathname) {
             play_beatmap_id: s.play_beatmap_id,
             baseline_pp_per_star: s.baseline_pp_per_star,
             is_unweighted: s.is_unweighted,
+            submitted_at: s.submitted_at,
+            mods: s.mods,
           });
         }
       }

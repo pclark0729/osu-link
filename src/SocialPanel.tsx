@@ -17,6 +17,7 @@ import { fetchOsuPerformanceRankForUser } from "./osuPlayerRankFetch";
 import type { PlayerRankInfo } from "./playerRank";
 import { SocialLeaderboard } from "./SocialLeaderboard";
 import { useStickyStuck } from "./MainPaneSticky";
+import { useBattleDesktopNotifications } from "./useBattleDesktopNotifications";
 
 type SocialSub = "friends" | "activity" | "battles" | "challenges" | "leaderboard";
 
@@ -929,6 +930,8 @@ export function SocialPanel({
     },
     [selfOsuId, localFriends],
   );
+
+  useBattleDesktopNotifications(socialGet, selfOsuId, resolvedSocialApiBaseUrl, socialFriendsLoadDone, displayNameForOsu);
 
   const leaderboardParticipants = useMemo(() => {
     const out: Array<{ osuId: number; label: string }> = [];
