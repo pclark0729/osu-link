@@ -121,6 +121,13 @@ if [[ "${SETUP_CADDY}" == "1" && "${PARTY_LAN_WS}" != "1" ]]; then
   WS_HOST="127.0.0.1"
 fi
 
+# HTTP (/health, /api/v1, /control) defaults to 127.0.0.1 only — unreachable from other PCs on LAN.
+# When the lobby WS is on 0.0.0.0, bind HTTP on all interfaces too so LAN osu-link can use http://Pi-IP:4681 (pairing, social API).
+HEALTH_HOST_VALUE="127.0.0.1"
+if [[ "${WS_HOST}" == "0.0.0.0" ]]; then
+  HEALTH_HOST_VALUE="0.0.0.0"
+fi
+
 mkdir -p "${LOGDIR}"
 chown "${RUN_USER}:${RUN_USER}" "${LOGDIR}"
 
@@ -130,6 +137,7 @@ INSTALL_ROOT=${INSTALL_ROOT}
 LOGDIR=${LOGDIR}
 HOST=${WS_HOST}
 PORT=${PARTY_PORT}
+HEALTH_HOST=${HEALTH_HOST_VALUE}
 LOG_LEVEL=info
 RUN_USER=${RUN_USER}
 DISCORD_INTERNAL_SECRET=${DISCORD_INTERNAL_SECRET_VALUE}
