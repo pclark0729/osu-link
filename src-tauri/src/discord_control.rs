@@ -13,9 +13,14 @@ use crate::osu_api;
 use crate::party_discovery::{
     resolve_discord_control_ws_url_effective, resolve_social_api_base_effective,
 };
-use crate::settings::{load_settings, save_settings, Settings};
+use crate::settings::{load_settings, save_settings, settings_with_draft_urls, Settings};
 
 const CROCKFORD: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// After this many failed connects in a row, back off to [`DISCORD_CONTROL_LONG_RETRY_SECS`] instead of hammering every few seconds.
+const DISCORD_CONTROL_QUICK_RETRY_CAP: u32 = 10;
+const DISCORD_CONTROL_SHORT_RETRY_SECS: u64 = 4;
+const DISCORD_CONTROL_LONG_RETRY_SECS: u64 = 60;
 
 fn gen_pair_code() -> String {
     let mut rng = rand::thread_rng();
@@ -46,8 +51,12 @@ fn emit_status(app: &AppHandle, connected: bool) {
 }
 
 /// Start pairing: register `tokenHash` on relay and persist session token locally.
-pub async fn prepare_pairing() -> Result<Value, String> {
-    let mut s = load_settings();
+pub async fn prepare_pairing(
+    party_server_url_draft: Option<String>,
+    social_api_base_url_draft: Option<String>,
+) -> Result<Value, String> {
+    let disk = load_settings();
+    let mut s = settings_with_draft_urls(&disk, party_server_url_draft, social_api_base_url_draft);
     let base = resolve_social_api_base_effective(&s)
         .await
         .ok_or_else(|| "Set Party server URL or Social API base URL (Settings).".to_string())?;
@@ -281,21 +290,36 @@ async fn one_connection(app: AppHandle, settings: &Settings) -> Result<(), Strin
 }
 
 pub async fn run_forever(app: AppHandle) {
+    let mut consecutive_connect_failures: u32 = 0;
     loop {
         let s = load_settings();
         if s.discord_control_enabled
             && s.discord_control_session_token.as_deref().is_some_and(|t| !t.is_empty())
         {
-            if let Err(e) = one_connection(app.clone(), &s).await {
-                let _ = app.emit(
-                    "discord-control-status",
-                    json!({ "connected": false, "error": e }),
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-            } else {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            match one_connection(app.clone(), &s).await {
+                Ok(()) => {
+                    consecutive_connect_failures = 0;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                Err(e) => {
+                    consecutive_connect_failures =
+                        consecutive_connect_failures.saturating_add(1);
+                    let _ = app.emit(
+                        "discord-control-status",
+                        json!({ "connected": false, "error": e }),
+                    );
+                    let wait_secs = if consecutive_connect_failures
+                        > DISCORD_CONTROL_QUICK_RETRY_CAP
+                    {
+                        DISCORD_CONTROL_LONG_RETRY_SECS
+                    } else {
+                        DISCORD_CONTROL_SHORT_RETRY_SECS
+                    };
+                    tokio::time::sleep(std::time::Duration::from_secs(wait_secs)).await;
+                }
             }
         } else {
+            consecutive_connect_failures = 0;
             emit_status(&app, false);
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }

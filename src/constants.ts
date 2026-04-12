@@ -21,6 +21,8 @@ export const PARTY_SERVER_URL_UI_HIDDEN = true;
 /**
  * Extra `ws://` URLs tried after `wss://` and `ws://public-host:4680` (NAT hairpin workaround).
  * Pi must use `HOST=0.0.0.0` on port 4680. Update if DHCP changes; use `VITE_PARTY_EXTRA_WS_URLS` to override without editing code.
+ *
+ * The first host is also used server-side as an HTTP fallback for Discord pairing (`http://192.168.1.43:4681` in `party_discovery.rs`).
  */
 export const PARTY_EXTRA_CONNECT_WS_URLS: readonly string[] = [
   "ws://192.168.1.43:4680",

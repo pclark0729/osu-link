@@ -17,6 +17,10 @@ const MDNS_SERVICE_TYPE: &str = "_osu-link-party._tcp.local.";
 const DISCOVERY_TIMEOUT: Duration = Duration::from_millis(1800);
 const CACHE_TTL: Duration = Duration::from_secs(90);
 
+/// Same LAN host as the first entry in the web client `PARTY_EXTRA_CONNECT_WS_URLS` (`ws://…:4680` → `http://…:4681`).
+/// Tried silently for Discord pairing after saved URLs / mDNS, before the public hosted relay.
+const PAIRING_SILENT_LAN_HTTP_FALLBACKS: &[&str] = &["http://192.168.1.43:4681"];
+
 static CACHE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
 fn cache_get() -> Option<String> {
@@ -149,6 +153,38 @@ fn discover_party_http_base_blocking() -> Option<String> {
         }
     }
     None
+}
+
+/// Ordered HTTP bases to try for Discord pairing when the first choice is unreachable (connection refused, timeout, etc.).
+/// Order: explicit saved URL → mDNS cache → fresh LAN discovery → known LAN fallback(s) → public hosted relay. De-duplicated.
+pub async fn pairing_http_base_candidates(settings: &Settings) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let push = |v: &mut Vec<String>, s: String| {
+        let t = s.trim().trim_end_matches('/').to_string();
+        if !t.is_empty() && !v.iter().any(|x| x == &t) {
+            v.push(t);
+        }
+    };
+
+    if let Some(b) = resolve_social_api_base_from_saved_settings(settings) {
+        push(&mut out, b);
+    }
+    if let Some(b) = cache_get() {
+        push(&mut out, b);
+    }
+    let discovered = tokio::task::spawn_blocking(discover_party_http_base_blocking)
+        .await
+        .ok()
+        .flatten();
+    if let Some(b) = discovered {
+        cache_set(b.clone());
+        push(&mut out, b);
+    }
+    for &h in PAIRING_SILENT_LAN_HTTP_FALLBACKS {
+        push(&mut out, h.to_string());
+    }
+    push(&mut out, default_hosted_social_api_base());
+    out
 }
 
 /// Effective social API base: saved settings, else cached/discovered LAN party-server, else hosted default.

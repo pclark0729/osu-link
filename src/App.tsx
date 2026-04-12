@@ -119,7 +119,7 @@ function settingsToCmdPayload(s: Settings) {
     socialApiBaseUrl: socialUrl,
     hotkeyFocusSearch: s.hotkeyFocusSearch.trim(),
     hotkeyRandomCurate: s.hotkeyRandomCurate.trim(),
-    discordControlEnabled: s.discordControlEnabled,
+    discordControlEnabled: true,
     discordControlSessionToken:
       s.discordControlSessionToken && s.discordControlSessionToken.trim() !== ""
         ? s.discordControlSessionToken.trim()
@@ -357,11 +357,12 @@ export default function App() {
     socialApiBaseUrl: null,
     hotkeyFocusSearch: DEFAULT_HOTKEY_FOCUS_SEARCH,
     hotkeyRandomCurate: DEFAULT_HOTKEY_RANDOM_CURATE,
-    discordControlEnabled: false,
+    discordControlEnabled: true,
     discordControlSessionToken: null,
     discordControlWsUrl: null,
   });
   const [discordPairingCode, setDiscordPairingCode] = useState<string | null>(null);
+  const [discordPairingBusy, setDiscordPairingBusy] = useState(false);
   const [discordWsConnected, setDiscordWsConnected] = useState(false);
   const [discordRemote, setDiscordRemote] = useState<{
     linked: boolean;
@@ -1054,14 +1055,33 @@ export default function App() {
   };
 
   const startDiscordPairing = async () => {
+    if (!isTauri()) return;
+    setDiscordPairingBusy(true);
     try {
-      const r = await invoke<{ code?: string }>("discord_control_prepare_pairing");
+      const r = await invoke<{ code?: string }>("discord_control_prepare_pairing", {
+        draft: {
+          partyServerUrl: settings.partyServerUrl,
+          socialApiBaseUrl: settings.socialApiBaseUrl,
+        },
+      });
       if (r.code) setDiscordPairingCode(r.code);
       const s = await invoke<Settings>("get_settings");
       setSettings(mapSettingsFromRust(s));
       pushToast("success", "Pairing code ready. In Discord run: /osulink link (with your code).");
     } catch (e) {
       pushToast("error", String(e));
+    } finally {
+      setDiscordPairingBusy(false);
+    }
+  };
+
+  const copyDiscordPairingCode = async () => {
+    if (!discordPairingCode) return;
+    try {
+      await navigator.clipboard.writeText(discordPairingCode);
+      pushToast("success", "Pairing code copied.");
+    } catch {
+      pushToast("error", "Could not copy to clipboard.");
     }
   };
 
@@ -1780,7 +1800,7 @@ export default function App() {
                   <input
                     type="text"
                     autoComplete="off"
-                    placeholder="https://127.0.0.1:4681"
+                    placeholder="http://192.168.x.x:4681 (Pi / party-server on your LAN)"
                     value={settings.socialApiBaseUrl ?? ""}
                     onChange={(e) =>
                       setSettings({
@@ -1790,6 +1810,16 @@ export default function App() {
                     }
                   />
                 </label>
+                <p className="hint">
+                  Social / Discord pairing use{" "}
+                  <code>{resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl) ?? "—"}</code>. Party
+                  HTTP is usually on port <code>4681</code> (party-server / Caddy on your Pi). Set this to your Pi&apos;s
+                  LAN URL if you want a fixed host, or try <code>http://raspberrypi.local:4681</code> if mDNS works. Use{" "}
+                  <code>http://127.0.0.1:4681</code> only when party-server runs on this PC. If you leave this empty,
+                  pairing still tries LAN discovery, then the same silent fallback as party connect (
+                  <code>http://192.168.1.43:4681</code>), then the public relay
+                  {PARTY_SERVER_URL_UI_HIDDEN ? " (Party WebSocket may be hidden in this build)." : "."}
+                </p>
                 <label className="field field--stack">
                   <span>Discord control WebSocket URL (optional)</span>
                   <input
@@ -1805,21 +1835,27 @@ export default function App() {
                     }
                   />
                 </label>
-                <label className="field field--row" style={{ alignItems: "center", gap: "0.5rem" }}>
-                  <input
-                    type="checkbox"
-                    checked={settings.discordControlEnabled}
-                    onChange={(e) =>
-                      setSettings({ ...settings, discordControlEnabled: e.target.checked })
-                    }
-                  />
-                  <span>Enable Discord remote control (outbound connection to relay)</span>
-                </label>
+                <p className="hint">
+                  Pairing uses the Party and Social API fields above immediately (no Save required first). Prefer{" "}
+                  <code>http://</code> to your Pi unless you have terminated TLS on that port. If the first relay cannot
+                  be reached, other relays (LAN discovery, <code>192.168.1.43:4681</code>, then the public host) are tried
+                  automatically without extra prompts.
+                </p>
                 {discordPairingCode && (
-                  <p className="hint">
-                    Pairing code: <strong>{discordPairingCode}</strong> — run{" "}
-                    <code>/osulink link</code> in Discord with this code (expires in ~15 minutes).
-                  </p>
+                  <div className="discord-pairing-code-block">
+                    <div className="party-code-row discord-pairing-code-row">
+                      <span className="party-code-label">Discord pairing code</span>
+                      <code className="party-code-value discord-pairing-code-value" aria-label="Discord pairing code">
+                        {discordPairingCode}
+                      </code>
+                      <button type="button" className="secondary" onClick={() => void copyDiscordPairingCode()}>
+                        Copy
+                      </button>
+                    </div>
+                    <p className="hint discord-pairing-code-hint u-mb-0">
+                      In Discord run <code>/osulink link</code> and paste this code. It expires in about 15 minutes.
+                    </p>
+                  </div>
                 )}
                 {settings.discordControlSessionToken && (
                   <p className="hint">
@@ -1833,14 +1869,35 @@ export default function App() {
                     )}
                   </p>
                 )}
+                {!isTauri() && (
+                  <p className="hint" role="status">
+                    Discord pairing and remote control run in the desktop app only (not in the browser).
+                  </p>
+                )}
                 <div className="row-actions">
-                  <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void startDiscordPairing()}>
-                    Start Discord pairing
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!isTauri() || discordPairingBusy}
+                    aria-busy={discordPairingBusy}
+                    onClick={() => void startDiscordPairing()}
+                  >
+                    {discordPairingBusy ? "Requesting code…" : "Start Discord pairing"}
                   </button>
-                  <button type="button" className="danger" disabled={!isTauri()} onClick={() => void revokeDiscordControl()}>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={!isTauri() || discordPairingBusy}
+                    onClick={() => void revokeDiscordControl()}
+                  >
                     Revoke Discord link
                   </button>
                 </div>
+                {discordPairingBusy && (
+                  <p className="hint u-mb-0" aria-live="polite">
+                    Contacting relay for a pairing code…
+                  </p>
+                )}
                 <p className="hint">
                   Songs folder: {resolvedSongs || "—"} · <strong>{localBeatmapsetIds.size}</strong> set
                   {localBeatmapsetIds.size === 1 ? "" : "s"} found (subfolders scanned).

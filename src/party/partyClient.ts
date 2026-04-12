@@ -13,6 +13,11 @@ export type PartyConnectionState = "disconnected" | "connecting" | "connected" |
 
 const MAX_LOCAL_CHAT_LINES = 200;
 
+/** After a party drop, retry up to this many times before stopping (avoids endless reconnect spam). */
+const MAX_PARTY_AUTO_RECONNECT_ATTEMPTS = 12;
+const PARTY_RECONNECT_BASE_MS = 2000;
+const PARTY_RECONNECT_MAX_DELAY_MS = 45_000;
+
 export interface PartyClientState {
   connection: PartyConnectionState;
   lastError: string | null;
@@ -49,6 +54,10 @@ export class PartyClient {
   private onEvent: (e: PartyEvent) => void;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closedByUser = false;
+  /** Counts scheduled auto-reconnects since the last successful WebSocket open; reset on manual connect or open. */
+  private reconnectAttempt = 0;
+  /** True only for the `connect()` call kicked off by the reconnect timer. */
+  private pendingAutoReconnect = false;
 
   constructor(initialUrl: string, onEvent: (e: PartyEvent) => void) {
     this.state = initialClientState(initialUrl);
@@ -66,6 +75,11 @@ export class PartyClient {
 
   connect(onOpen?: () => void, urlCandidates?: string[]) {
     this.closedByUser = false;
+    if (!this.pendingAutoReconnect) {
+      this.reconnectAttempt = 0;
+    }
+    this.pendingAutoReconnect = false;
+
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.state = { ...this.state, connection: "connected", lastError: null };
       this.emitState();
@@ -189,6 +203,7 @@ export class PartyClient {
 
       ws.onopen = () => {
         connectionSucceeded = true;
+        this.reconnectAttempt = 0;
         this.state = { ...this.state, connection: "connected", lastError: null, url };
         this.emitState();
         onOpen?.();
@@ -242,6 +257,8 @@ export class PartyClient {
 
   disconnect() {
     this.closedByUser = true;
+    this.reconnectAttempt = 0;
+    this.pendingAutoReconnect = false;
     this.clearReconnect();
     if (this.ws) {
       this.ws.close();
@@ -253,10 +270,26 @@ export class PartyClient {
 
   private scheduleReconnect() {
     this.clearReconnect();
+    this.reconnectAttempt += 1;
+    if (this.reconnectAttempt > MAX_PARTY_AUTO_RECONNECT_ATTEMPTS) {
+      this.state = {
+        ...initialClientState(this.state.url),
+        url: this.state.url,
+        connection: "error",
+        lastError: `Could not reconnect after ${MAX_PARTY_AUTO_RECONNECT_ATTEMPTS} attempts. Use Connect to try again.`,
+      };
+      this.emitState();
+      return;
+    }
+    const exp = Math.min(
+      PARTY_RECONNECT_MAX_DELAY_MS,
+      PARTY_RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt - 1),
+    );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
+      this.pendingAutoReconnect = true;
       this.connect();
-    }, 2000);
+    }, exp);
   }
 
   private clearReconnect() {

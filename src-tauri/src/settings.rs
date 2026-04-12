@@ -28,7 +28,7 @@ pub struct Settings {
     #[serde(default = "default_hotkey_random_curate")]
     pub hotkey_random_curate: String,
     /// When true, maintain outbound WebSocket to the party-server `/control` relay for Discord.
-    #[serde(default)]
+    #[serde(default = "default_discord_control_enabled")]
     pub discord_control_enabled: bool,
     /// Session token for Discord control (paired with relay SQLite). Empty = not paired / cleared.
     #[serde(default)]
@@ -46,6 +46,10 @@ fn default_hotkey_random_curate() -> String {
     "Alt+Shift+R".to_string()
 }
 
+fn default_discord_control_enabled() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -57,7 +61,7 @@ impl Default for Settings {
             social_api_base_url: None,
             hotkey_focus_search: default_hotkey_focus_search(),
             hotkey_random_curate: default_hotkey_random_curate(),
-            discord_control_enabled: false,
+            discord_control_enabled: true,
             discord_control_session_token: None,
             discord_control_ws_url: None,
         }
@@ -103,6 +107,32 @@ pub fn save_settings(settings: &Settings) -> Result<(), String> {
 
 /// Default hosted party WebSocket (must match frontend `HOSTED_PARTY_WS_URL` when user has no saved URL).
 pub(crate) const DEFAULT_PARTY_WS_FALLBACK: &str = "wss://osulink.peyton-clark.com";
+
+/// Apply optional URL drafts from the settings UI (may be unsaved) for pairing / resolution.
+pub fn settings_with_draft_urls(
+    disk: &Settings,
+    party_server_url_draft: Option<String>,
+    social_api_base_url_draft: Option<String>,
+) -> Settings {
+    let mut s = disk.clone();
+    if let Some(p) = party_server_url_draft {
+        let t = p.trim();
+        s.party_server_url = if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        };
+    }
+    if let Some(so) = social_api_base_url_draft {
+        let t = so.trim();
+        s.social_api_base_url = if t.is_empty() {
+            None
+        } else {
+            Some(t.to_string())
+        };
+    }
+    s
+}
 
 /// Party / social API base derived only from explicit settings (no hosted default, no LAN discovery).
 pub fn resolve_social_api_base_from_saved_settings(settings: &Settings) -> Option<String> {

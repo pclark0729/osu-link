@@ -12,7 +12,7 @@ mod user_beatmap_best;
 
 use collections::{load_collection_store, save_collection_store, CollectionStore};
 use std::collections::HashMap;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use settings::{load_settings, save_settings, Settings};
 
@@ -424,9 +424,18 @@ async fn osu_user_first_scores(
     osu_api::api_user_scores(&token, user_id, "first", lim, m, offset).await
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscordPairingDraft {
+    #[serde(default)]
+    party_server_url: Option<String>,
+    #[serde(default)]
+    social_api_base_url: Option<String>,
+}
+
 #[tauri::command]
-async fn discord_control_prepare_pairing() -> Result<Value, String> {
-    discord_control::prepare_pairing().await
+async fn discord_control_prepare_pairing(draft: DiscordPairingDraft) -> Result<Value, String> {
+    discord_control::prepare_pairing(draft.party_server_url, draft.social_api_base_url).await
 }
 
 #[tauri::command]

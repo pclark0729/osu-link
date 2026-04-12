@@ -3436,6 +3436,29 @@ button.onboarding-copy {
   box-shadow: var(--shadow-inset-quiet);
 }
 
+.discord-pairing-code-block {
+  margin: 0.85rem 0 0.5rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-inset-quiet);
+}
+
+.discord-pairing-code-row {
+  margin-bottom: 0.5rem;
+}
+
+.discord-pairing-code-value {
+  font-size: 1.35rem;
+  letter-spacing: 0.2em;
+  font-variant-numeric: tabular-nums;
+}
+
+.discord-pairing-code-hint {
+  margin-top: 0.35rem;
+}
+
 .party-roster {
   margin: 1rem 0;
   padding: 0.85rem;
