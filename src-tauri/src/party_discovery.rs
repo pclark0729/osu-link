@@ -10,7 +10,8 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde_json::Value;
 
 use crate::settings::{
-    default_hosted_social_api_base, resolve_social_api_base_from_saved_settings, Settings,
+    default_hosted_social_api_base, normalize_social_api_http_base_party_port,
+    resolve_social_api_base_from_saved_settings, Settings,
 };
 
 const MDNS_SERVICE_TYPE: &str = "_osu-link-party._tcp.local.";
@@ -195,21 +196,24 @@ pub async fn pairing_http_base_candidates(settings: &Settings) -> Vec<String> {
 /// home LAN, leaving those fields empty can auto-discover the Pi; off-LAN, discovery finds nothing and
 /// this falls back to the default relay — which is a **different** host unless that relay is your Pi.
 pub async fn resolve_social_api_base_effective(settings: &Settings) -> Option<String> {
-    if let Some(base) = resolve_social_api_base_from_saved_settings(settings) {
-        return Some(base);
-    }
-    if let Some(cached) = cache_get() {
-        return Some(cached);
-    }
-    let discovered = tokio::task::spawn_blocking(discover_party_http_base_blocking)
-        .await
-        .ok()
-        .flatten();
-    if let Some(base) = discovered {
-        cache_set(base.clone());
-        return Some(base);
-    }
-    Some(default_hosted_social_api_base())
+    let resolved = if let Some(base) = resolve_social_api_base_from_saved_settings(settings) {
+        Some(base)
+    } else if let Some(cached) = cache_get() {
+        Some(cached)
+    } else {
+        let discovered = tokio::task::spawn_blocking(discover_party_http_base_blocking)
+            .await
+            .ok()
+            .flatten();
+        if let Some(base) = discovered {
+            let n = normalize_social_api_http_base_party_port(&base);
+            cache_set(n.clone());
+            Some(n)
+        } else {
+            Some(default_hosted_social_api_base())
+        }
+    };
+    resolved.map(|b| normalize_social_api_http_base_party_port(&b))
 }
 
 pub async fn resolve_discord_control_ws_url_effective(settings: &Settings) -> Option<String> {

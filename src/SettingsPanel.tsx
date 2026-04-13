@@ -328,7 +328,7 @@ export function SettingsPanel({
             <input
               type="text"
               autoComplete="off"
-              placeholder="http://host:4681"
+              placeholder="https://host:4681"
               value={settings.socialApiBaseUrl ?? ""}
               onChange={(e) =>
                 setSettings({
@@ -339,7 +339,8 @@ export function SettingsPanel({
             />
           </label>
           <p className="hint">
-            Resolved API (from fields above): <code>{resolvedApi ?? "—"}</code> · HTTP often <code>:4681</code>
+            Use port <code>4681</code> for HTTP (REST). Port <code>4680</code> is WebSocket only — using{" "}
+            <code>:4680</code> here causes error 426. Resolved API (from fields above): <code>{resolvedApi ?? "—"}</code>
           </p>
           {isTauri() && runtimeSocialApiBaseUrl ? (
             <p className="hint">

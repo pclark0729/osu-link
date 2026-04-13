@@ -168,7 +168,7 @@ pub fn settings_with_draft_urls(
 
 /// If the user pasted the party **WebSocket** port into the Social API HTTP field, requests hit the WS
 /// listener and get **426 Upgrade Required**. Map `:4680` → `:4681` like `party_ws_to_http_base`.
-fn normalize_social_api_http_base_party_port(base: &str) -> String {
+pub(crate) fn normalize_social_api_http_base_party_port(base: &str) -> String {
     let base = base.trim().trim_end_matches('/');
     let lower = base.to_ascii_lowercase();
     if lower.ends_with(":4680") {
