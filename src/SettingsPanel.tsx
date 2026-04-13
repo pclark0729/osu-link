@@ -59,6 +59,7 @@ export function SettingsPanel({
   revokeDiscordControl,
   discordRemote,
   discordWsConnected,
+  runtimeSocialApiBaseUrl = null,
 }: {
   appVersion: string;
   settings: SettingsPanelState;
@@ -83,6 +84,8 @@ export function SettingsPanel({
   revokeDiscordControl: () => void | Promise<void>;
   discordRemote: { linked: boolean; discordUserId?: string; online?: boolean } | null;
   discordWsConnected: boolean;
+  /** Actual REST base used by the desktop app (saved settings + mDNS + default). */
+  runtimeSocialApiBaseUrl?: string | null;
 }) {
   const resolvedApi = resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl);
   const [discordBattleNotify, setDiscordBattleNotify] = useState(() =>
@@ -336,16 +339,27 @@ export function SettingsPanel({
             />
           </label>
           <p className="hint">
-            Resolved API: <code>{resolvedApi ?? "—"}</code> · HTTP often <code>:4681</code>
+            Resolved API (from fields above): <code>{resolvedApi ?? "—"}</code> · HTTP often <code>:4681</code>
           </p>
+          {isTauri() && runtimeSocialApiBaseUrl ? (
+            <p className="hint">
+              REST in use (saved + LAN discovery): <code>{runtimeSocialApiBaseUrl}</code>
+            </p>
+          ) : null}
           <details className="settings-disclosure settings-disclosure--nested">
             <summary>LAN / relay details</summary>
             <div className="settings-disclosure-body">
+              <p className="hint u-mb-3">
+                <strong>Pi at home + friend on the internet:</strong> everyone must share one database. You can leave
+                Party/Social empty on your LAN so the app discovers the Pi; your friend must set Party WebSocket or
+                Social API base to your <strong>public</strong> URL (port-forward to the same Pi). If they leave defaults
+                and your Pi is not the public relay host, they will hit a different server than you.
+              </p>
               <p className="hint u-mb-0">
                 Pairing tries LAN discovery, then fallbacks including <code>http://192.168.1.43:4681</code>, then the public
                 relay
                 {PARTY_SERVER_URL_UI_HIDDEN ? " (WS field may be hidden in this build)." : "."} Leave Social API empty to use
-                discovery. Use <code>http://127.0.0.1:4681</code> only if party-server runs on this PC.
+                discovery on LAN. Use <code>http://127.0.0.1:4681</code> only if party-server runs on this PC.
               </p>
             </div>
           </details>

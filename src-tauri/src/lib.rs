@@ -402,6 +402,13 @@ async fn social_api_delete(path: String) -> Result<Value, String> {
     serde_json::from_str(&text).map_err(|e| format!("JSON: {e}: {text}"))
 }
 
+/// Social REST base after saved settings + LAN discovery + defaults — matches `social_api_get` / `social_api_post`.
+#[tauri::command]
+async fn get_effective_social_api_base() -> Result<Option<String>, String> {
+    let s = load_settings();
+    Ok(crate::party_discovery::resolve_social_api_base_effective(&s).await)
+}
+
 #[tauri::command]
 async fn osu_friends() -> Result<Value, String> {
     let (_s, token) = fresh_token().await?;
@@ -515,6 +522,7 @@ pub fn run() {
             social_api_get,
             social_api_post,
             social_api_delete,
+            get_effective_social_api_base,
             osu_friends,
             osu_user_profile,
             osu_user_ruleset_stats,

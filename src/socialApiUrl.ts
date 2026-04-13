@@ -2,7 +2,7 @@ import { DEFAULT_PARTY_WS_URL, HOSTED_PARTY_WS_URL } from "./constants";
 
 /**
  * Match Rust `settings::party_ws_to_http_base` / `resolve_social_api_base_from_saved_settings` for display-only hints.
- * (Runtime also tries LAN mDNS via `party_discovery::resolve_social_api_base_effective`.)
+ * The desktop app also calls `get_effective_social_api_base` — saved settings, then LAN mDNS, then default relay.
  */
 /** If Social API base mistakenly uses party WS port 4680, map to REST port 4681 (matches Rust `normalize_social_api_http_base_party_port`). */
 export function normalizeSocialApiHttpBasePartyPort(base: string): string {

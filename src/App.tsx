@@ -9,6 +9,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -405,6 +406,8 @@ export default function App() {
     discordControlWsUrl: null,
     uiSoundEffectsEnabled: true,
   });
+  /** Matches Rust `social_api_*` (saved settings + mDNS + default); null until loaded or non-Tauri. */
+  const [effectiveSocialApiBaseUrl, setEffectiveSocialApiBaseUrl] = useState<string | null>(null);
   const uiSoundEnabledRef = useRef(settings.uiSoundEffectsEnabled);
   uiSoundEnabledRef.current = settings.uiSoundEffectsEnabled;
   const [discordPairingCode, setDiscordPairingCode] = useState<string | null>(null);
@@ -790,6 +793,19 @@ export default function App() {
     await reloadLocalLibrary();
   }, [reloadLocalLibrary]);
 
+  const refreshEffectiveSocialApiBase = useCallback(async () => {
+    if (!isTauri()) {
+      setEffectiveSocialApiBaseUrl(null);
+      return;
+    }
+    try {
+      const v = await invoke<string | null>("get_effective_social_api_base");
+      setEffectiveSocialApiBaseUrl(v ?? null);
+    } catch {
+      setEffectiveSocialApiBaseUrl(null);
+    }
+  }, []);
+
   const handleOnboardingFinished = useCallback(async () => {
     try {
       const s = await invoke<Settings>("get_settings");
@@ -799,13 +815,15 @@ export default function App() {
     }
     await refreshAuth();
     await refreshPaths();
-  }, [refreshAuth, refreshPaths]);
+    await refreshEffectiveSocialApiBase();
+  }, [refreshAuth, refreshPaths, refreshEffectiveSocialApiBase]);
 
   useEffect(() => {
     void (async () => {
       try {
         const s = await invoke<Settings>("get_settings");
         setSettings(mapSettingsFromRust(s));
+        await refreshEffectiveSocialApiBase();
         const urls = buildPartyConnectUrlCandidates(s.partyServerUrl);
         partyClientRef.current?.setUrl(urls[0]);
         setPartyState((prev) => ({ ...prev, url: urls[0] }));
@@ -823,7 +841,7 @@ export default function App() {
       await refreshPaths();
       setBootReady(true);
     })();
-  }, [refreshAuth, refreshPaths]);
+  }, [refreshAuth, refreshPaths, refreshEffectiveSocialApiBase]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -881,6 +899,7 @@ export default function App() {
             setDiscordPairingCode(null);
             const s = await invoke<Settings>("get_settings");
             setSettings(mapSettingsFromRust(s));
+            void refreshEffectiveSocialApiBase();
             setDiscordRemote({
               linked: true,
               discordUserId: st.discordUserId,
@@ -894,7 +913,7 @@ export default function App() {
       })();
     }, 2000);
     return () => window.clearInterval(id);
-  }, [discordPairingCode]);
+  }, [discordPairingCode, refreshEffectiveSocialApiBase]);
 
   useEffect(() => {
     if (!isTauri() || tab !== "settings" || !bootReady) return;
@@ -1186,6 +1205,7 @@ export default function App() {
       setSettingsMsg("Settings saved.");
       pushToast("success", "Settings saved.");
       await refreshPaths();
+      await refreshEffectiveSocialApiBase();
     } catch (e) {
       setSettingsMsg(String(e));
     }
@@ -1222,6 +1242,7 @@ export default function App() {
       if (r.code) setDiscordPairingCode(r.code);
       const s = await invoke<Settings>("get_settings");
       setSettings(mapSettingsFromRust(s));
+      await refreshEffectiveSocialApiBase();
       pushToast("success", "Pairing code ready. In Discord run: /osulink link (with your code).");
     } catch (e) {
       pushToast("error", String(e));
@@ -1248,6 +1269,7 @@ export default function App() {
       setDiscordWsConnected(false);
       const s = await invoke<Settings>("get_settings");
       setSettings(mapSettingsFromRust(s));
+      await refreshEffectiveSocialApiBase();
       pushToast("success", "Discord control revoked.");
     } catch (e) {
       pushToast("error", String(e));
@@ -1446,6 +1468,13 @@ export default function App() {
   const totalMapsInLibrary = collectionStore.collections.reduce((acc, c) => acc + c.items.length, 0);
 
   const desktopShellClass = "app-desktop";
+
+  const resolvedSocialApiBaseForUi = useMemo(
+    () =>
+      effectiveSocialApiBaseUrl ??
+      resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl),
+    [effectiveSocialApiBaseUrl, settings.partyServerUrl, settings.socialApiBaseUrl],
+  );
 
   if (!bootReady) {
     const boot = (
@@ -1704,7 +1733,7 @@ export default function App() {
         {tab === "social" && (
           <SocialPanel
             onToast={pushToast}
-            resolvedSocialApiBaseUrl={resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl)}
+            resolvedSocialApiBaseUrl={resolvedSocialApiBaseForUi}
             socialApiIsOverride={Boolean(settings.socialApiBaseUrl?.trim())}
             discordControlSessionToken={settings.discordControlSessionToken}
           />
@@ -1720,7 +1749,7 @@ export default function App() {
         {tab === "achievements" && (
           <AchievementsPanel
             pushToast={(tone, message) => pushToast(tone, message)}
-            resolvedSocialApiBaseUrl={resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl)}
+            resolvedSocialApiBaseUrl={resolvedSocialApiBaseForUi}
             onboardingCompleted={settings.onboardingCompleted}
           />
         )}
@@ -1809,6 +1838,7 @@ export default function App() {
             revokeDiscordControl={revokeDiscordControl}
             discordRemote={discordRemote}
             discordWsConnected={discordWsConnected}
+            runtimeSocialApiBaseUrl={effectiveSocialApiBaseUrl}
           />
         )}
 

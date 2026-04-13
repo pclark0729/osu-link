@@ -187,7 +187,13 @@ pub async fn pairing_http_base_candidates(settings: &Settings) -> Vec<String> {
     out
 }
 
-/// Effective social API base: saved settings, else cached/discovered LAN party-server, else hosted default.
+/// Effective social API base for REST (`social_api_*`): saved Party/Social fields, else LAN discovery
+/// (mDNS `_osu-link-party._tcp`), else the public default relay.
+///
+/// **Same database for everyone:** Remote friends must use a URL that reaches **your** party-server (set
+/// Party WebSocket or Social API base to your public hostname — port-forward / DDNS to the Pi). On your
+/// home LAN, leaving those fields empty can auto-discover the Pi; off-LAN, discovery finds nothing and
+/// this falls back to the default relay — which is a **different** host unless that relay is your Pi.
 pub async fn resolve_social_api_base_effective(settings: &Settings) -> Option<String> {
     if let Some(base) = resolve_social_api_base_from_saved_settings(settings) {
         return Some(base);
