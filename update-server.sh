@@ -8,6 +8,13 @@
 # Overrides (optional):
 #   REMOTE=origin BRANCH=main SETUP_CADDY=1 PUBLIC_DOMAIN=osulink.peyton-clark.com ./update-server.sh
 #
+# Recovery — if you are on an older commit and pull fails ("would be overwritten by merge")
+# on install-pi.sh, update-server.sh, etc., either drop local edits to those files then pull:
+#   git fetch origin
+#   git restore party-server/install-pi.sh update-server.sh
+#   git pull --ff-only origin main
+# or stash and pull:  git stash push -u -m "pre-update" && git pull --ff-only origin main
+#
 
 set -euo pipefail
 
