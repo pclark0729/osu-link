@@ -149,7 +149,7 @@ sudo SETUP_CADDY=1 ./install-pi.sh
 sudo ./install-pi.sh
 ```
 
-The script installs Node 22, copies this folder to `/opt/osu-link-party`, runs `npm install`, and installs a **`osu-party`** systemd unit.
+The script installs Node 22, copies this folder to `/opt/osu-link-party`, runs `npm install`, and installs a **`osu-party`** systemd unit. Re-runs (including `./update-server.sh` from the repo) **keep** `/opt/osu-link-party/data/` — the SQLite file for the social API is not wiped.
 
 After a TLS install, set osu-link’s Party URL to:
 

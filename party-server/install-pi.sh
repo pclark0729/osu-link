@@ -104,10 +104,12 @@ echo "    $(node -v) @ $(command -v node)"
 
 echo "==> Deploy ${INSTALL_ROOT}"
 mkdir -p "${INSTALL_ROOT}"
+# Preserve runtime data (SQLite + WAL/SHM) — not in git; rsync --delete would remove it otherwise.
 rsync -a \
   --delete \
   --exclude node_modules \
   --exclude .git \
+  --exclude data \
   "${SCRIPT_DIR}/" "${INSTALL_ROOT}/"
 chown -R "${RUN_USER}:${RUN_USER}" "${INSTALL_ROOT}"
 chmod +x "${INSTALL_ROOT}/systemd-run-screen.sh" 2>/dev/null || true
