@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { MainPaneSticky } from "./MainPaneSticky";
 import type { DownloadLogEntry, DownloadLogSource } from "./downloadLog";
 
 const SOURCE_LABEL: Record<DownloadLogSource, string> = {
@@ -57,37 +56,30 @@ export function DownloadLogsPanel({
 
   return (
     <div className="panel panel-elevated download-logs-panel">
-      <MainPaneSticky>
-        <div className="panel-head download-logs-head">
-          <h2>Download log</h2>
-          <p className="panel-sub panel-sub--flush-top">
-            Recent beatmap imports from Search, Collections, and Party ({entries.length}{" "}
-            {entries.length === 1 ? "entry" : "entries"}).
-          </p>
-          <div className="row-actions row-actions--spaced download-logs-actions">
-            <button type="button" className="secondary" disabled={entries.length === 0} onClick={copyAll}>
-              Copy as TSV
-            </button>
-            <button
-              type="button"
-              className="danger"
-              disabled={entries.length === 0}
-              onClick={() => {
-                onClear();
-                onToast("info", "Download log cleared.");
-              }}
-            >
-              Clear log
-            </button>
-          </div>
+      <div className="download-logs-head">
+        <p className="panel-sub panel-sub--flush-top download-logs-count" aria-live="polite">
+          <strong>{entries.length}</strong> {entries.length === 1 ? "entry" : "entries"}
+        </p>
+        <div className="row-actions row-actions--spaced download-logs-actions">
+          <button type="button" className="secondary" disabled={entries.length === 0} onClick={copyAll}>
+            Copy as TSV
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={entries.length === 0}
+            onClick={() => {
+              onClear();
+              onToast("info", "Download log cleared.");
+            }}
+          >
+            Clear log
+          </button>
         </div>
-      </MainPaneSticky>
+      </div>
 
       {entries.length === 0 ? (
-        <p className="hint download-logs-empty">
-          No imports yet. When you download maps from Search, Collections, or Party, they appear here with
-          status and import path.
-        </p>
+        <p className="hint download-logs-empty">No imports yet.</p>
       ) : (
         <ul className="download-logs-list" aria-label="Download history">
           {entries.map((e) => (

@@ -28,8 +28,8 @@ import {
   saveTrainingSets,
   type SavedTrainingSet,
 } from "./trainSetsStorage";
+import { ArrowDown, ArrowUp, Pause, Play, Shuffle, Square } from "lucide-react";
 import { notifyDesktop } from "./desktopNotify";
-import { MainPaneSticky } from "./MainPaneSticky";
 
 type ToastTone = "info" | "success" | "error";
 
@@ -102,6 +102,7 @@ export function TrainPanel({
   const [pickQuery, setPickQuery] = useState("");
   const [pickBusy, setPickBusy] = useState(false);
   const [pickResults, setPickResults] = useState<unknown[]>([]);
+  const [pickOpen, setPickOpen] = useState(false);
   const importTrainRef = useRef<HTMLInputElement>(null);
   const failCountedIdx = useRef<number | null>(null);
   const mapsPassedRef = useRef(0);
@@ -618,22 +619,17 @@ export function TrainPanel({
     [importTrainingFile],
   );
 
+  const queueStep = session ? session.currentIndex + 1 : 0;
+  const queueTotal = session ? session.queue.length : 0;
+  const queueProgressPct = queueTotal > 0 ? Math.min(100, (queueStep / queueTotal) * 100) : 0;
+
   return (
     <div className="panel panel-elevated train-panel">
-      <MainPaneSticky>
-        <div className="panel-head">
-          <h2>Train</h2>
-          <p className="panel-sub">
-            Ramping queue, &gt;{DEFAULT_ACC}% acc to advance (adjustable). Polls recent scores — if you play 100+ maps before a
-            check, a pass can roll off the recent list.
-          </p>
-        </div>
-      </MainPaneSticky>
-
       {pollErr && (
-        <p className="hint" role="alert">
-          Poll: {pollErr}
-        </p>
+        <div className="train-poll-alert" role="alert">
+          <span className="train-poll-alert__label">Score poll failed</span>
+          <span className="train-poll-alert__msg">{pollErr}</span>
+        </div>
       )}
 
       <div className="train-controls">
@@ -661,42 +657,93 @@ export function TrainPanel({
       </div>
 
       {!session && (
-        <div className="train-start-actions">
-          <button type="button" className="primary" disabled={busy || meOsuId == null} onClick={() => void startAuto()}>
-            Start auto queue
-          </button>
-          <p className="hint">Uses your last 30 days of plays to set the starting star band.</p>
+        <div className="train-setup-card">
+          <p
+            className="hint train-setup-warning"
+            title="Passes come from recent scores (last ~100). Heavy play between polls can miss a pass."
+          >
+            Scores are polled from recent plays only.
+          </p>
+          <div className="train-subpanel">
+            <details className="disclosure-block train-how-details">
+              <summary>How training works</summary>
+              <div className="train-disclosure-body">
+                <ul className="train-how-list">
+                  <li>
+                    Minimum accuracy to advance is the value above (default {DEFAULT_ACC}%; adjustable before you start).
+                  </li>
+                  <li>
+                    osu-link polls your recent scores about every {Math.round(POLL_MS / 1000)} seconds to detect passes and
+                    fails.
+                  </li>
+                  <li>The API returns up to 100 recent plays — very long grind sessions can miss a pass.</li>
+                  <li>Auto queue uses your last 30 days of plays to pick a starting star band.</li>
+                </ul>
+              </div>
+            </details>
+          </div>
+          <div className="train-start-actions">
+            <button type="button" className="primary" disabled={busy || meOsuId == null} onClick={() => void startAuto()}>
+              Start auto queue
+            </button>
+            {meOsuId == null ? (
+              <p className="hint train-start-hint">Sign in (Settings) to start.</p>
+            ) : (
+              <p className="hint train-start-hint" title="Starting ★ band from your last 30 days of plays.">
+                Ready — starting band from recent plays.
+              </p>
+            )}
+          </div>
         </div>
       )}
 
       {session && current && (
-        <div className="train-active">
-          <div className="train-current-meta">
-            <h3 className="social-h3">Current map</h3>
+        <div className="train-active train-session">
+          <div className="train-progress">
+            <div className="train-progress__track" aria-hidden>
+              <div className="train-progress__fill" style={{ width: `${queueProgressPct}%` }} />
+            </div>
+            <p className="train-progress__label">
+              Step {queueStep} / {queueTotal}
+              <span className="train-progress__meta">
+                {" "}
+                · Band ★{session.starMin.toFixed(2)}–{session.starMax.toFixed(2)}
+                {session.source === "custom" ? ` · “${session.trainingSetName ?? "custom"}”` : ""}
+              </span>
+            </p>
+          </div>
+
+          <div className="train-hero">
+            <h3 className="visually-hidden">Current map</h3>
             <p className="train-map-title">
               {current.artist} — {current.title}
             </p>
-            <p className="hint">
+            <p className="train-stars-line">
               ★{current.stars.toFixed(2)}
-              {current.avgPp != null ? ` · avg PP ~${Math.round(current.avgPp)}` : ""}
+              {current.avgPp != null ? ` · ~${Math.round(current.avgPp)} pp` : ""}
             </p>
-            <p className="hint">
-              Target beatmap id {current.beatmapId} ·{" "}
+            <div className="train-meta-row" role="group" aria-label="Beatmap details">
+              <span className="train-meta-chip">#{current.beatmapId}</span>
               {localBeatmapsetIds.has(current.beatmapsetId) ? (
-                <span className="train-in-lib">In your Songs folder</span>
+                <span className="train-meta-chip train-meta-chip--ok">In Songs</span>
               ) : (
-                <span className="train-not-in-lib">Not detected locally — download the set first</span>
+                <span className="train-meta-chip train-meta-chip--warn">Not local</span>
               )}
-            </p>
+            </div>
           </div>
+
           {session.source === "auto" && (
-            <div className="train-feel-row">
-              <p className="hint">This map feels too easy or too hard? Nudges the ★ band used for the next auto picks (toggle to clear).</p>
-              <div className="train-actions-row">
+            <div
+              className="train-feel-compact"
+              title="Adjusts the next auto-pick star band. Click again to clear."
+            >
+              <div className="train-feel-compact__inner" role="group" aria-label="Star band nudge">
                 <button
                   type="button"
-                  className={session.difficultyFeel === "too_easy" ? "primary" : "secondary"}
+                  className={`train-feel-btn ${session.difficultyFeel === "too_easy" ? "train-feel-btn--active" : ""}`}
                   disabled={busy}
+                  aria-label="Too easy — nudge next picks easier"
+                  aria-pressed={session.difficultyFeel === "too_easy"}
                   onClick={() =>
                     setSession((prev) =>
                       prev && prev.source === "auto"
@@ -708,12 +755,15 @@ export function TrainPanel({
                     )
                   }
                 >
-                  Too easy
+                  <ArrowDown size={18} strokeWidth={2.25} aria-hidden />
+                  <span className="train-feel-btn__text">Easier</span>
                 </button>
                 <button
                   type="button"
-                  className={session.difficultyFeel === "too_hard" ? "primary" : "secondary"}
+                  className={`train-feel-btn ${session.difficultyFeel === "too_hard" ? "train-feel-btn--active" : ""}`}
                   disabled={busy}
+                  aria-label="Too hard — nudge next picks harder"
+                  aria-pressed={session.difficultyFeel === "too_hard"}
                   onClick={() =>
                     setSession((prev) =>
                       prev && prev.source === "auto"
@@ -725,93 +775,119 @@ export function TrainPanel({
                     )
                   }
                 >
-                  Too hard
+                  <ArrowUp size={18} strokeWidth={2.25} aria-hidden />
+                  <span className="train-feel-btn__text">Harder</span>
                 </button>
               </div>
             </div>
           )}
-          <div className="train-actions-row">
-            <button type="button" className="secondary" onClick={() => void openOsuBeatmap(current.beatmapId)}>
-              Open in osu!
-            </button>
-            {session.source === "auto" && (
-              <button type="button" className="secondary" disabled={busy} onClick={() => void rerollCurrent()}>
-                Randomize map
-              </button>
-            )}
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy}
-              onClick={() => {
-                setSession((s) => (s ? { ...s, paused: !s.paused } : s));
-              }}
-            >
-              {session.paused ? "Resume" : "Pause"}
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                if (session) endSession(session, "user");
-              }}
-            >
-              End session
-            </button>
-          </div>
-          <p className="hint">
-            Global shortcuts (Settings → Keyboard): open current map, randomize (auto queue), end session — work while osu! is
-            focused.
-          </p>
-          <p className="hint">
-            Step {session.currentIndex + 1} / {session.queue.length} · band ★{session.starMin.toFixed(2)}–
-            {session.starMax.toFixed(2)}
-            {session.source === "custom" ? ` · “${session.trainingSetName ?? "custom"}”` : ""}
-          </p>
-        </div>
-      )}
 
-      {session && (
-        <details className="settings-disclosure train-pick-details">
-          <summary>Pick a different map (search)</summary>
-          <div className="settings-disclosure-body">
-            <div className="train-pick-search">
-              <input
-                type="search"
-                value={pickQuery}
-                onChange={(e) => setPickQuery(e.target.value)}
-                placeholder="Search ranked sets…"
-                className="train-pick-input"
-              />
-              <button type="button" className="secondary" disabled={pickBusy} onClick={() => void runPickSearch()}>
-                Search
+          <div className="train-actions-stack">
+            <div className="train-open-pick-row">
+              <div className="train-actions-primary">
+                <button type="button" className="primary train-open-osu" onClick={() => void openOsuBeatmap(current.beatmapId)}>
+                  Open in osu!
+                </button>
+              </div>
+              <div className="train-pick-subpanel">
+                <div className="disclosure-block train-pick-details">
+                  <button
+                    type="button"
+                    className="secondary disclosure-toggle"
+                    id="train-pick-toggle"
+                    aria-expanded={pickOpen}
+                    aria-controls="train-pick-panel"
+                    onClick={() => setPickOpen((o) => !o)}
+                  >
+                    Pick a different map (search)
+                  </button>
+                  <div
+                    id="train-pick-panel"
+                    role="region"
+                    aria-labelledby="train-pick-toggle"
+                    hidden={!pickOpen}
+                    className="train-disclosure-body"
+                  >
+                    <div className="train-pick-search">
+                      <input
+                        type="search"
+                        value={pickQuery}
+                        onChange={(e) => setPickQuery(e.target.value)}
+                        placeholder="Search ranked sets…"
+                        className="train-pick-input"
+                      />
+                      <button type="button" className="secondary" disabled={pickBusy} onClick={() => void runPickSearch()}>
+                        Search
+                      </button>
+                    </div>
+                    <ul className="train-pick-list">
+                      {pickResults.map((raw) => {
+                        const set = raw as Record<string, unknown>;
+                        const id = Number(set.id);
+                        return (
+                          <li key={id}>
+                            <button type="button" className="train-pick-item" onClick={() => replaceCurrentWithSet(raw)}>
+                              {String(set.artist)} — {String(set.title)}
+                            </button>
+                            {onInspectBeatmapset && (
+                              <button type="button" className="secondary train-pick-inspect" onClick={() => onInspectBeatmapset(id)}>
+                                Details
+                              </button>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="train-actions-row train-actions-row--session-icons" role="toolbar" aria-label="Session controls">
+              {session.source === "auto" && (
+                <button
+                  type="button"
+                  className="secondary train-session-icon-btn"
+                  disabled={busy}
+                  aria-label="Randomize current map"
+                  title="Randomize"
+                  onClick={() => void rerollCurrent()}
+                >
+                  <Shuffle size={18} strokeWidth={2.25} aria-hidden />
+                </button>
+              )}
+              <button
+                type="button"
+                className="secondary train-session-icon-btn"
+                disabled={busy}
+                aria-label={session.paused ? "Resume session" : "Pause session"}
+                title={session.paused ? "Resume" : "Pause"}
+                onClick={() => {
+                  setSession((s) => (s ? { ...s, paused: !s.paused } : s));
+                }}
+              >
+                {session.paused ? <Play size={18} strokeWidth={2.25} aria-hidden /> : <Pause size={18} strokeWidth={2.25} aria-hidden />}
+              </button>
+              <button
+                type="button"
+                className="secondary train-session-icon-btn"
+                aria-label="End session"
+                title="End session"
+                onClick={() => {
+                  if (session) endSession(session, "user");
+                }}
+              >
+                <Square size={18} strokeWidth={2.25} aria-hidden />
               </button>
             </div>
-            <ul className="train-pick-list">
-              {pickResults.map((raw) => {
-                const set = raw as Record<string, unknown>;
-                const id = Number(set.id);
-                return (
-                  <li key={id}>
-                    <button type="button" className="train-pick-item" onClick={() => replaceCurrentWithSet(raw)}>
-                      {String(set.artist)} — {String(set.title)}
-                    </button>
-                    {onInspectBeatmapset && (
-                      <button type="button" className="secondary train-pick-inspect" onClick={() => onInspectBeatmapset(id)}>
-                        Details
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
           </div>
-        </details>
+        </div>
       )}
 
       <section className="panel-section">
         <h3 className="social-h3">Saved training sets</h3>
-        <p className="hint">Import shared JSON (creates a new set). Export uses the same format as collections, plus optional acc threshold and mode.</p>
+        <p className="hint" title="Same shape as collection export, plus acc threshold and mode.">
+          Import/export JSON — same idea as Collections.
+        </p>
         <div className="share-actions train-share-actions">
           <input ref={importTrainRef} type="file" accept=".json,application/json" className="visually-hidden" onChange={onImportFile} />
           <button type="button" className="secondary" onClick={() => importTrainRef.current?.click()}>
@@ -831,39 +907,44 @@ export function TrainPanel({
           <span className="field-label">New set name (from active collection — type name)</span>
           <input value={newSetName} onChange={(e) => setNewSetName(e.target.value)} placeholder="My drills" />
         </label>
-        <p className="hint">
-          Create sets from the Collections tab by exporting a collection, then import here — or add maps via search in Train after
-          starting a session.
+        <p className="hint" title="Export a collection from Collections and import here, or pick maps after you start a session.">
+          From Collections: export → import here.
         </p>
-        <ul className="train-saved-list">
-          {savedSets.map((s) => (
-            <li key={s.id} className="train-saved-row">
-              <div>
-                <strong>{s.name}</strong> · {s.items.length} sets · {s.mode} · ≥{s.accThreshold}%
-              </div>
-              <div className="train-saved-actions">
-                <button type="button" className="primary" disabled={busy} onClick={() => void startCustom(s)}>
-                  Start
-                </button>
-                <button type="button" className="secondary" onClick={() => exportSaved(s)}>
-                  Export
-                </button>
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => {
-                    if (window.confirm(`Delete “${s.name}”?`)) {
-                      removeTrainingSet(s.id);
-                      persistSavedSets(loadTrainingSets());
-                    }
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
-        </ul>
+        {savedSets.length === 0 ? (
+          <p className="train-saved-empty hint">
+            No saved sets — import <code className="train-code">.json</code> or paste.
+          </p>
+        ) : (
+          <ul className="train-saved-list">
+            {savedSets.map((s) => (
+              <li key={s.id} className="train-saved-row">
+                <div>
+                  <strong>{s.name}</strong> · {s.items.length} sets · {s.mode} · ≥{s.accThreshold}%
+                </div>
+                <div className="train-saved-actions">
+                  <button type="button" className="primary" disabled={busy} onClick={() => void startCustom(s)}>
+                    Start
+                  </button>
+                  <button type="button" className="secondary" onClick={() => exportSaved(s)}>
+                    Export
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      if (window.confirm(`Delete “${s.name}”?`)) {
+                        removeTrainingSet(s.id);
+                        persistSavedSets(loadTrainingSets());
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

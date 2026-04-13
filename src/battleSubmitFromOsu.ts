@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
+  ASSIGNED_STAR_MAX_DELTA,
   baselinePpPerStarFromBestScores,
+  medianStarsFromBestScores,
   pickBestChallengePlay,
   scoreBeatmapsetId,
 } from "./challengeScoring";
@@ -48,12 +50,26 @@ export async function submitBattleFromOsu(args: SubmitBattleFromOsuArgs): Promis
         mode: "osu",
       });
       const baseline = baselinePpPerStarFromBestScores(bestRaw);
+      const preferredStars = medianStarsFromBestScores(bestRaw);
       const recentRaw = await invoke<unknown>("osu_user_recent_scores", { userId: uid, limit: 100, mode: "osu" });
       const picked = pickBestChallengePlay(recentRaw, beatmapsetId, {
         fixedBeatmapId,
         baselinePpPerStar: baseline,
+        preferredStars,
       });
       if (picked == null) {
+        if (fixedBeatmapId != null && Number.isFinite(fixedBeatmapId)) {
+          return {
+            ok: false,
+            error: `No recent ranked score on the fixed difficulty (beatmap #${fixedBeatmapId}). Play it in osu! (stable), then try again.`,
+          };
+        }
+        if (preferredStars != null && Number.isFinite(preferredStars)) {
+          return {
+            ok: false,
+            error: `No recent ranked score on this set within ±${ASSIGNED_STAR_MAX_DELTA}★ of your assigned tier (~${preferredStars.toFixed(1)}★ from your top plays). Play a map in that star range on this set in osu! (stable), then try again.`,
+          };
+        }
         return {
           ok: false,
           error:
@@ -72,7 +88,7 @@ export async function submitBattleFromOsu(args: SubmitBattleFromOsuArgs): Promis
       });
       return {
         ok: true,
-        message: `Submitted ${picked.pp.toFixed(0)}pp (${picked.rankValue.toFixed(2)}× vs your baseline) from osu! recent scores.`,
+        message: `Submitted ${picked.pp.toFixed(0)}pp on ~${picked.stars.toFixed(1)}★ (${picked.rankValue.toFixed(2)}× vs your baseline) from osu! recent scores.`,
       };
     }
     const raw = await invoke<unknown>("osu_user_recent_scores", { userId: uid, limit: 100, mode: "osu" });

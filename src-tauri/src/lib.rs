@@ -1,3 +1,4 @@
+mod audio_viz;
 mod beatmap_avg_pp;
 mod collections;
 mod discord_control;
@@ -40,6 +41,15 @@ fn save_settings_cmd(s: Settings) -> Result<(), String> {
 #[tauri::command]
 async fn open_osu_beatmap(app: tauri::AppHandle, beatmap_id: u64) -> Result<(), String> {
     let url = format!("osu://b/{}", beatmap_id);
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Open a beatmap set in osu!stable (`osu://s/…` — pick a difficulty in-game).
+#[tauri::command]
+async fn open_osu_beatmapset(app: tauri::AppHandle, beatmapset_id: u64) -> Result<(), String> {
+    let url = format!("osu://s/{}", beatmapset_id);
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
@@ -481,12 +491,14 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 discord_control::run_forever(handle).await;
             });
+            audio_viz::spawn_audio_viz(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_settings,
             save_settings_cmd,
             open_osu_beatmap,
+            open_osu_beatmapset,
             oauth_login,
             oauth_logout,
             auth_status,

@@ -46,7 +46,7 @@ npm test
 
 ## OAuth setup
 
-1. Create an OAuth application at [osu! OAuth apps](https://osu.ppy.sh/home/account/oauth/new).
+1. Create an OAuth application from [osu! account settings → OAuth](https://osu.ppy.sh/home/account/edit#new-oauth-application) (sign in, then use **Register new application**).
 2. Set the redirect URI exactly to **`http://127.0.0.1:42813/callback`** (same as [`OAUTH_REDIRECT_URI`](src/constants.ts) / `src-tauri/src/oauth.rs`).
 3. Put the **Client ID** and **Client Secret** into the app (onboarding or Settings).
 

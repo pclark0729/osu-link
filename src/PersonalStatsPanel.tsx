@@ -3,8 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { parseUserRulesetPayload, type ParsedRow } from "./SocialLeaderboard";
 import { computePerformanceInsights } from "./statsInsights";
 import { computeOsuPerformanceRank } from "./playerRank";
-import { MainPaneSticky } from "./MainPaneSticky";
 import { StatsCharts } from "./stats/StatsCharts";
+import { PersonalStatsBodySkeleton } from "./Skeleton";
 import { StatsHero } from "./stats/StatsHero";
 import { StatsInsights } from "./stats/StatsInsights";
 import { StatsOverview } from "./stats/StatsOverview";
@@ -283,7 +283,7 @@ export function PersonalStatsPanel({
     return (
       <div className="social-section stats-section">
         <div className="social-card stats-intro-card">
-          <p className="panel-sub stats-intro-lead">Use the desktop app for profile and charts.</p>
+          <p className="panel-sub stats-intro-lead">Desktop app only.</p>
         </div>
       </div>
     );
@@ -293,7 +293,7 @@ export function PersonalStatsPanel({
     return (
       <div className="social-section stats-section">
         <div className="social-card stats-intro-card">
-          <p className="panel-sub stats-intro-lead">Sign in from Settings to see stats.</p>
+          <p className="panel-sub stats-intro-lead">Sign in (Settings).</p>
         </div>
       </div>
     );
@@ -316,7 +316,7 @@ export function PersonalStatsPanel({
 
   return (
     <div className="social-section stats-section panel panel-elevated stats-panel">
-      <MainPaneSticky className="stats-sticky">
+      <div className="stats-sticky">
         <StatsHero
           username={row?.username ?? null}
           usernamePlaceholder={busy && !row ? "Loading your profile…" : "—"}
@@ -329,7 +329,7 @@ export function PersonalStatsPanel({
           onRefresh={() => void load()}
         />
         <StatsSubnav tab={statsTab} onChange={setStatsTab} />
-      </MainPaneSticky>
+      </div>
 
       {row && !row.error ? (
         <>
@@ -354,9 +354,9 @@ export function PersonalStatsPanel({
         </>
       ) : row?.error ? (
         <p className="hint stats-err stats-tab-body-err">Could not load ruleset stats: {row.error}</p>
-      ) : (
-        <p className="hint stats-tab-body-placeholder">{busy ? "Loading…" : null}</p>
-      )}
+      ) : busy ? (
+        <PersonalStatsBodySkeleton />
+      ) : null}
     </div>
   );
 }

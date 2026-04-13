@@ -14,7 +14,6 @@ import { PlayerRankCard } from "./PlayerRankCard";
 import { computeOsuPerformanceRank } from "./playerRank";
 import { parseUserRulesetPayload, type ParsedRow } from "./SocialLeaderboard";
 import { computeTrainingAggregates, loadTrainingHistory } from "./trainHistory";
-import { MainPaneSticky } from "./MainPaneSticky";
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -97,7 +96,7 @@ function progressHint(def: AchievementDef, ctx: ProgressCtx): string | null {
     case "social-friends-5":
       return friends < 5 ? `${friends} / 5 accepted friends` : null;
     case "social-challenge-join":
-      return challengesJoined < 1 ? "Join an open challenge from Social" : null;
+      return challengesJoined < 1 ? "Join or submit to an open challenge (Social · Battles)" : null;
     case "social-challenge-join-3":
       return challengesJoined < 3 ? `${challengesJoined} / 3 challenges joined` : null;
     case "social-battle-done":
@@ -227,7 +226,11 @@ export function AchievementsPanel({
         try {
           const cj = asRecord(await socialGet("/api/v1/challenges"));
           const ch = Array.isArray(cj.challenges) ? cj.challenges : [];
-          challengesJoined = ch.filter((x) => Boolean(asRecord(x).i_am_in)).length;
+          challengesJoined = ch.filter((x) => {
+            const r = asRecord(x);
+            if (r.joined !== undefined) return Boolean(r.joined);
+            return Boolean(r.i_am_in);
+          }).length;
         } catch {
           /* ignore */
         }
@@ -351,11 +354,13 @@ export function AchievementsPanel({
 
   return (
     <div className="panel panel-elevated achievements-panel">
-      <MainPaneSticky className="achievements-sticky">
+      <div className="achievements-sticky">
         <header className="achievements-hero">
           <div className="achievements-hero-text">
             <h2 className="achievements-title">Achievements</h2>
-            <p className="achievements-tagline">Milestones across your library, drills, and social play.</p>
+            <p className="achievements-tagline">
+              Unlock badges as you train, build your library, and play with friends.
+            </p>
             {busy || syncErr ? (
               <p className="achievements-meta">
                 {busy ? <span className="achievements-meta-busy">Syncing…</span> : null}
@@ -410,7 +415,7 @@ export function AchievementsPanel({
             Refresh
           </button>
         </div>
-      </MainPaneSticky>
+      </div>
 
       <ul className="achievement-grid">
         {filtered.map((def) => {

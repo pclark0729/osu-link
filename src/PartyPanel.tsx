@@ -1,4 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  ClipboardPaste,
+  Copy,
+  Crown,
+  Hash,
+  ListMusic,
+  Loader2,
+  LogOut,
+  MessageCircle,
+  UserRound,
+  Users,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { PARTY_SERVER_URL_UI_HIDDEN } from "./constants";
 import type { PartyClientState } from "./party/partyClient";
 import type { QueuedBeatmapWire } from "./party/protocol";
@@ -23,6 +37,23 @@ function queueItemLabel(q: QueuedBeatmapWire): string {
 function formatChatTime(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+function displayInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  if (parts.length === 1 && parts[0].length >= 2) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0]?.[0] ?? "?").toUpperCase();
+}
+
+function ConnectionGlyph({ state }: { state: PartyConnectionState }) {
+  if (state === "connecting") {
+    return <Loader2 className="party-conn-glyph party-conn-glyph--spin" aria-hidden />;
+  }
+  if (state === "connected") {
+    return <Wifi className="party-conn-glyph" aria-hidden />;
+  }
+  return <WifiOff className="party-conn-glyph" aria-hidden />;
 }
 
 export function PartyPanel({
@@ -102,94 +133,88 @@ export function PartyPanel({
 
   return (
     <div className="panel panel-elevated party-panel-root">
-      <div className="panel-head">
-        <h2>Party lobbies</h2>
-        <p className="panel-sub">
-          {PARTY_SERVER_URL_UI_HIDDEN ? (
-            <>Connect, then create or join with a <strong>lobby code</strong>.</>
-          ) : (
-            <>Same <strong>server URL</strong> for everyone; join with a <strong>lobby code</strong>.</>
-          )}
-        </p>
-      </div>
-
-      <div className="party-server-status" role="status" aria-live="polite">
-        <div className="party-server-status-title">Server status</div>
-        <dl className="party-server-status-grid">
-          <dt>Host</dt>
-          <dd>{partyWsHostLabel(partyState.url)}</dd>
-          <dt>Your connection</dt>
-          <dd>
-            <span className={`party-conn-badge party-conn-${connection}`}>{connLabel[connection]}</span>
-          </dd>
-          {connection === "connected" && (
-            <>
-              <dt>Lobby</dt>
-              <dd>
-                {inLobby ? (
-                  <>
-                    <code className="party-status-code">{lobbyCode}</code>
-                    <span className="party-status-meta"> · {members.length} players</span>
-                  </>
-                ) : (
-                  "Not in a lobby"
-                )}
-              </dd>
-            </>
-          )}
-        </dl>
-        {(connection === "disconnected" || connection === "error") && (
-          <div className="party-server-status-actions">
-            <button type="button" className="primary party-status-reconnect" onClick={onConnect}>
-              {connection === "error" || lastError ? "Reconnect to server" : "Connect to server"}
-            </button>
+      <section className="party-conn-strip" role="status" aria-live="polite">
+        <div className={`party-conn-strip-inner party-conn-strip--${connection}`}>
+          <div className="party-conn-strip-icon" aria-hidden>
+            <ConnectionGlyph state={connection} />
           </div>
+          <div className="party-conn-strip-body">
+            <h2 className="party-conn-strip-title">{connLabel[connection]}</h2>
+            <p className="party-conn-strip-host" title={partyState.url || undefined}>
+              {partyWsHostLabel(partyState.url)}
+            </p>
+          </div>
+          {connection === "connected" && (
+            <div className="party-conn-strip-meta">
+              {inLobby ? (
+                <span className="party-mini-pill party-mini-pill--live">
+                  <Users size={13} strokeWidth={2.25} aria-hidden />
+                  In lobby · {members.length}
+                </span>
+              ) : (
+                <span className="party-mini-pill">Not in a lobby</span>
+              )}
+            </div>
+          )}
+        </div>
+        {(connection === "disconnected" || connection === "error") && (
+          <button type="button" className="primary party-conn-strip-cta" onClick={onConnect}>
+            {connection === "error" || lastError ? "Reconnect to server" : "Connect to server"}
+          </button>
         )}
-      </div>
+      </section>
 
       {!publicPartyUrl && (
-        <div className="party-online-cta party-online-manual">
+        <div className="party-online-cta party-online-manual party-section-gap-sm">
           <div className="party-online-title">Remote play</div>
-          <p className="hint u-mt-0">
-            Host a <code>wss://</code> party server and paste its URL below (see project docs).
+          <p className="hint u-mt-0" title="See project docs for hosting a wss:// party server.">
+            Paste a <code>wss://</code> URL below.
           </p>
         </div>
       )}
 
-      {!PARTY_SERVER_URL_UI_HIDDEN && (
+      <section className="party-setup-card" aria-label="Server and display name">
+        {!PARTY_SERVER_URL_UI_HIDDEN && (
+          <label className="field">
+            <span className="party-field-label">
+              <Wifi size={14} strokeWidth={2.25} aria-hidden />
+              Party server WebSocket URL
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              placeholder="wss://your-party-host.example.com"
+              value={partyUrlDraft}
+              onChange={(e) => onPartyUrlChange(e.target.value)}
+              disabled={connection === "connecting" || inLobby}
+            />
+          </label>
+        )}
         <label className="field">
-          <span>Party server WebSocket URL</span>
+          <span className="party-field-label">
+            <UserRound size={14} strokeWidth={2.25} aria-hidden />
+            Display name
+          </span>
           <input
             type="text"
             autoComplete="off"
-            placeholder="wss://your-party-host.example.com"
-            value={partyUrlDraft}
-            onChange={(e) => onPartyUrlChange(e.target.value)}
-            disabled={connection === "connecting" || inLobby}
+            value={displayName}
+            onChange={(e) => onDisplayNameChange(e.target.value)}
+            disabled={inLobby}
+            placeholder="How others see you"
           />
         </label>
-      )}
-      <label className="field">
-        <span>Display name</span>
-        <input
-          type="text"
-          autoComplete="off"
-          value={displayName}
-          onChange={(e) => onDisplayNameChange(e.target.value)}
-          disabled={inLobby}
-          placeholder="Player"
-        />
-      </label>
+      </section>
 
       {(connection === "connected" || connection === "connecting") && (
-        <div className="row-actions row-actions--wrap">
+        <div className="party-setup-actions">
           <button
             type="button"
-            className="secondary"
+            className="secondary party-setup-disconnect"
             onClick={onDisconnect}
             disabled={connection === "connecting"}
           >
-            Disconnect
+            Disconnect from server
           </button>
         </div>
       )}
@@ -205,19 +230,37 @@ export function PartyPanel({
         )}
 
       {connection === "connected" && !inLobby && (
-        <>
-          <div className="grid-2 party-section-gap">
-            <div>
-              <p className="hint u-mt-0">
-                <strong>Create</strong> a lobby and share the code.
-              </p>
-              <button type="button" className="primary" onClick={onCreateLobby}>
+        <section className="party-pre-lobby party-section-gap" aria-label="Create or join a lobby">
+          <h2 className="party-pre-lobby-heading">Start or join a session</h2>
+          <p className="party-pre-lobby-lead hint">Host a new room, or enter a code someone shared with you.</p>
+          <div className="party-pre-lobby-grid">
+            <article className="party-action-card party-action-card--host">
+              <div className="party-action-card-head">
+                <span className="party-action-icon party-action-icon--host" aria-hidden>
+                  <Crown size={22} strokeWidth={2} />
+                </span>
+                <div>
+                  <h3 className="party-action-title">Host</h3>
+                  <p className="party-action-desc">Create a lobby and share the code.</p>
+                </div>
+              </div>
+              <button type="button" className="primary party-action-cta" onClick={onCreateLobby}>
                 Create lobby
               </button>
-            </div>
-            <div>
-              <label className="field">
-                <span>Join code</span>
+            </article>
+
+            <article className="party-action-card party-action-card--join">
+              <div className="party-action-card-head">
+                <span className="party-action-icon party-action-icon--join" aria-hidden>
+                  <Hash size={22} strokeWidth={2} />
+                </span>
+                <div>
+                  <h3 className="party-action-title">Join</h3>
+                  <p className="party-action-desc">Enter a lobby code to connect.</p>
+                </div>
+              </div>
+              <label className="field party-field-tight">
+                <span>Lobby code</span>
                 <input
                   type="text"
                   autoComplete="off"
@@ -226,38 +269,98 @@ export function PartyPanel({
                   onChange={(e) => onJoinCodeChange(e.target.value.toUpperCase())}
                 />
               </label>
-              <div className="row-actions row-actions--wrap-tight">
-                <button type="button" className="secondary" onClick={onJoinLobby}>
+              <div className="party-join-actions">
+                <button type="button" className="primary" onClick={onJoinLobby}>
                   Join lobby
                 </button>
-                <button type="button" className="secondary" onClick={onJoinFromClipboard}>
-                  Join from clipboard
+                <button type="button" className="secondary party-join-clipboard" onClick={onJoinFromClipboard}>
+                  <ClipboardPaste size={16} strokeWidth={2.25} aria-hidden />
+                  From clipboard
                 </button>
               </div>
-            </div>
+            </article>
           </div>
-        </>
+        </section>
       )}
 
       {inLobby && lobbyCode && (
         <div className="party-in-lobby party-section-gap">
-          <div className="party-code-row">
-            <span className="party-code-label">Lobby code</span>
-            <code className="party-code-value">{lobbyCode}</code>
-            <button type="button" className="secondary" onClick={onCopyCode}>
-              Copy
-            </button>
+          <div className="party-lobby-hero">
+            <div className="party-lobby-hero-glow" aria-hidden />
+            <div className="party-lobby-hero-inner">
+              <span className="party-lobby-eyebrow">Lobby code</span>
+              <div className="party-lobby-code-row">
+                <code className="party-lobby-code">{lobbyCode}</code>
+                <button type="button" className="secondary party-btn-with-icon" onClick={onCopyCode}>
+                  <Copy size={16} strokeWidth={2.25} aria-hidden />
+                  Copy
+                </button>
+              </div>
+              <div className="party-lobby-pills">
+                <span className="party-pill">
+                  <Users size={14} strokeWidth={2.25} aria-hidden />
+                  {members.length} in party
+                </span>
+                {isLeader ? (
+                  <span className="party-pill party-pill--accent">
+                    <Crown size={14} strokeWidth={2.25} aria-hidden />
+                    You’re the leader
+                  </span>
+                ) : (
+                  <span className="party-pill party-pill--muted">
+                    <UserRound size={14} strokeWidth={2.25} aria-hidden />
+                    Member
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
-          <p className="hint">
+
+          <p
+            className="party-role-hint"
+            title={isLeader ? "Queue maps from Search or Collections." : "Leader controls the queue."}
+          >
             {isLeader
-              ? "Leader: use Send to party from Search/Collections, or manage the queue below."
-              : "Waiting for the leader. Imports use your Songs folder and download options."}
+              ? "Queue beatmaps from Search or Collections — everyone sees the list here."
+              : "Hang tight — the leader picks maps for the group."}
           </p>
+
+          <div className="party-roster party-roster--cards">
+            <div className="party-roster-head">
+              <Users size={16} strokeWidth={2.25} aria-hidden />
+              <span className="party-roster-head-text">Players</span>
+              <span className="party-roster-count">{members.length}</span>
+            </div>
+            <ul className="party-roster-list">
+              {members.map((m) => (
+                <li key={m.id} className="party-roster-item">
+                  <span className="party-roster-avatar" aria-hidden>
+                    {displayInitials(m.displayName)}
+                  </span>
+                  <div className="party-roster-item-main">
+                    <span className="party-roster-name">{m.displayName}</span>
+                    <span className="party-roster-badges">
+                      {m.id === leaderId && (
+                        <span className="party-badge-leader">
+                          <Crown size={10} strokeWidth={2.5} aria-hidden />
+                          Leader
+                        </span>
+                      )}
+                      {m.id === selfId && <span className="party-badge-you">You</span>}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
 
           <div className="party-lobby-split">
             <section className="party-queue-card" aria-label="Beatmap queue">
               <div className="party-section-head">
-                <h3 className="party-section-title">Beatmap queue</h3>
+                <h3 className="party-section-title">
+                  <ListMusic size={15} strokeWidth={2.25} className="party-section-title-icon" aria-hidden />
+                  Beatmap queue
+                </h3>
                 {isLeader && queuedMaps.length > 0 && (
                   <button type="button" className="secondary party-queue-clear" onClick={onClearQueue}>
                     Clear all
@@ -300,16 +403,22 @@ export function PartyPanel({
             </section>
 
             <section className="party-chat-card" aria-label="Lobby chat">
-              <h3 className="party-section-title">Lobby chat</h3>
+              <h3 className="party-section-title">
+                <MessageCircle size={15} strokeWidth={2.25} className="party-section-title-icon" aria-hidden />
+                Lobby chat
+              </h3>
               <div className="party-chat-log" role="log" aria-live="polite">
                 {chat.length === 0 ? (
                   <p className="hint party-chat-empty">No messages yet. Say hi.</p>
                 ) : (
                   chat.map((line, i) => (
-                    <div key={`${line.ts}-${i}`} className="party-chat-line">
+                    <div
+                      key={`${line.ts}-${i}`}
+                      className={`party-chat-line${line.memberId === selfId ? " party-chat-line--self" : ""}`}
+                    >
                       <div className="party-chat-line-head">
-                        <span className="party-chat-time">{formatChatTime(line.ts)}</span>
                         <span className="party-chat-name">{nameById.get(line.memberId) ?? "Player"}</span>
+                        <span className="party-chat-time">{formatChatTime(line.ts)}</span>
                       </div>
                       <div className="party-chat-text">{line.text}</div>
                     </div>
@@ -328,7 +437,11 @@ export function PartyPanel({
                   maxLength={280}
                   disabled={connection !== "connected"}
                 />
-                <button type="submit" className="primary" disabled={connection !== "connected" || chatDraft.trim() === ""}>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={connection !== "connected" || chatDraft.trim() === ""}
+                >
                   Send
                 </button>
               </form>
@@ -368,19 +481,8 @@ export function PartyPanel({
             </div>
           )}
 
-          <div className="party-roster">
-            <div className="party-roster-title">Players ({members.length})</div>
-            <ul className="party-roster-list">
-              {members.map((m) => (
-                <li key={m.id}>
-                  <span className="party-roster-name">{m.displayName}</span>
-                  {m.id === leaderId && <span className="party-badge-leader">Leader</span>}
-                  {m.id === selfId && <span className="party-badge-you">You</span>}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <button type="button" className="danger" onClick={onLeaveLobby}>
+          <button type="button" className="danger party-leave-btn" onClick={onLeaveLobby}>
+            <LogOut size={17} strokeWidth={2.25} aria-hidden />
             Leave lobby
           </button>
         </div>

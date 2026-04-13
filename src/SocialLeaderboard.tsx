@@ -16,6 +16,7 @@ import {
   YAxis,
 } from "recharts";
 import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
+import { SocialLeaderboardLoadingSkeleton } from "./Skeleton";
 
 const RECHARTS_TOOLTIP_PROPS = {
   contentStyle: {
@@ -542,7 +543,6 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
 
   return (
     <div className="social-section social-leaderboard-section">
-      {lbBusy && <p className="hint social-lb-loading" aria-live="polite">Loading leaderboard…</p>}
       <p className="hint social-lb-intro">
         Each refresh fetches stats for everyone{includeRecent ? "; recent charts add more API calls" : ""}.
       </p>
@@ -571,6 +571,10 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
 
       {participants.length === 0 ? (
         <p className="hint">Add friends to compare; your profile shows when signed in.</p>
+      ) : lbBusy ? (
+        <SocialLeaderboardLoadingSkeleton
+          tableRows={Math.min(12, Math.max(3, participants.length))}
+        />
       ) : (
         <>
           <div className="social-lb-charts">

@@ -1,55 +1,23 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { baselinePpPerStarFromBestScores } from "./challengeScoring";
+import {
+  ASSIGNED_STAR_MAX_DELTA,
+  baselinePpPerStarFromBestScores,
+  medianStarsFromBestScores,
+} from "./challengeScoring";
 import { submitBattleFromOsu as submitBattleFromOsuApi } from "./battleSubmitFromOsu";
-import { osuRankedStarRangeFromBeatmapset } from "./beatmapSetStarRange";
-import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
+import type { NeuSelectOption } from "./NeuSelect";
 import { fetchOsuPerformanceRankForUser } from "./osuPlayerRankFetch";
 import type { PlayerRankInfo } from "./playerRank";
-
-function asRecord(v: unknown): Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
-}
-
-const AUTO_SUBMIT_STORAGE_KEY = "osu-link.battles.autoSubmit.v1";
-
-function loadAutoSubmitEnabled(): boolean {
-  try {
-    return localStorage.getItem(AUTO_SUBMIT_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveAutoSubmitEnabled(on: boolean): void {
-  try {
-    localStorage.setItem(AUTO_SUBMIT_STORAGE_KEY, on ? "1" : "0");
-  } catch {
-    /* ignore */
-  }
-}
-
-const BATTLE_WINDOW_PRESET_OPTIONS: NeuSelectOption[] = [
-  { value: "", label: "Choose time limit…" },
-  { value: "86400000", label: "24 hours" },
-  { value: "172800000", label: "48 hours" },
-  { value: "604800000", label: "7 days" },
-  { value: "custom", label: "Custom end date…" },
-];
-
-function formatTimeRemaining(ms: number): string {
-  if (ms <= 0) return "0:00";
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  if (h >= 48) {
-    const d = Math.floor(h / 24);
-    return `${d}d ${h % 24}h`;
-  }
-  if (h > 0) return `${h}h ${m}m`;
-  const s = totalSec % 60;
-  return `${m}m ${s}s`;
-}
+import { BattleCard } from "./battles/BattleCard";
+import type { FixedBeatmapDetail } from "./battles/BattleSubmitRequirement";
+import { BattleDetailModal } from "./battles/BattleDetailModal";
+import { loadAutoSubmitEnabled, saveAutoSubmitEnabled } from "./battles/battleConstants";
+import { BattleNewFlow, type BattleRematchSeed } from "./battles/BattleNewFlow";
+import { BattleScoreModal } from "./battles/BattleScoreModal";
+import { asRecord, sortActiveBattlesByPriority } from "./battles/battleUtils";
+import { useBattlePoll } from "./battles/useBattlePoll";
+import { ChallengesPanel } from "./ChallengesPanel";
 
 export type BattlesPanelProps = {
   onToast: (tone: "info" | "success" | "error", message: string) => void;
@@ -62,6 +30,8 @@ export type BattlesPanelProps = {
   resolvedSocialApiBaseUrl: string | null;
   /** Increment to refetch battles (e.g. after parent refresh completes) */
   refreshSignal: number;
+  /** Parent Social panel busy (global refresh) */
+  refreshBusy: boolean;
 };
 
 export function BattlesPanel({
@@ -74,38 +44,23 @@ export function BattlesPanel({
   friendSelectOptions,
   resolvedSocialApiBaseUrl,
   refreshSignal,
+  refreshBusy,
 }: BattlesPanelProps) {
   const [busy, setBusy] = useState(false);
   const [battles, setBattles] = useState<unknown[]>([]);
-  const [battleOpponentFriend, setBattleOpponentFriend] = useState("");
-  const [battleOpponentManual, setBattleOpponentManual] = useState("");
-  const [battleMapQuery, setBattleMapQuery] = useState("");
-  const [battleMapResults, setBattleMapResults] = useState<
-    Array<{ id: number; title: string; artist: string; starRange: string | null }>
-  >([]);
-  const [battleMapSearching, setBattleMapSearching] = useState(false);
-  const [battlePick, setBattlePick] = useState<{
-    id: number;
-    title: string;
-    artist: string;
-    starRange: string | null;
-  } | null>(null);
-  const [battleMapSelectValue, setBattleMapSelectValue] = useState("");
-  const [battleRelativePp, setBattleRelativePp] = useState(true);
-  const [battleDiffOptions, setBattleDiffOptions] = useState<NeuSelectOption[]>([
-    { value: "", label: "Any difficulty" },
-  ]);
-  const [battleDiffValue, setBattleDiffValue] = useState("");
-  const [battleDeadlinePreset, setBattleDeadlinePreset] = useState("");
-  const [battleDeadlineCustom, setBattleDeadlineCustom] = useState("");
   const [hydratedTitles, setHydratedTitles] = useState<Record<number, { title: string; artist: string }>>({});
   const fetchedSetRef = useRef<Set<number>>(new Set());
+  const [fixedBeatmapDetailById, setFixedBeatmapDetailById] = useState<
+    Map<number, FixedBeatmapDetail | null>
+  >(() => new Map());
+  const fixedBeatmapInFlightRef = useRef<Set<number>>(new Set());
   const [tick, setTick] = useState(0);
   const [scoreModal, setScoreModal] = useState<{ battleId: number; relativePp: boolean } | null>(null);
   const [scoreDraft, setScoreDraft] = useState("");
-  const battlePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [rankByOsuId, setRankByOsuId] = useState<Map<number, PlayerRankInfo>>(new Map());
   const [baselinePpByOsuId, setBaselinePpByOsuId] = useState<Map<number, number | null>>(new Map());
+  /** Median ★ from top plays — assigned tier for relative PP when no fixed difficulty (submit must be within ±ASSIGNED_STAR_MAX_DELTA). */
+  const [medianStarsByOsuId, setMedianStarsByOsuId] = useState<Map<number, number | null>>(new Map());
   const [detailBattleId, setDetailBattleId] = useState<number | null>(null);
   const [detailPayload, setDetailPayload] = useState<{
     battle: Record<string, unknown>;
@@ -113,7 +68,9 @@ export function BattlesPanel({
   } | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [autoSubmitEnabled, setAutoSubmitEnabled] = useState(() => loadAutoSubmitEnabled());
-  const pendingRematchBmRef = useRef<number | null>(null);
+  const [rematchSeed, setRematchSeed] = useState<BattleRematchSeed | null>(null);
+  const consumeRematchSeed = useCallback(() => setRematchSeed(null), []);
+  const [challengeRefreshBump, setChallengeRefreshBump] = useState(0);
   const autoSubmitWarnedRef = useRef(false);
   const autoSubmitTargetsRef = useRef<
     Array<{ id: number; setId: number; relativePp: boolean; fixedBm: number | null }>
@@ -127,134 +84,22 @@ export function BattlesPanel({
     setBattles(Array.isArray(b) ? b : []);
   }, [socialGet]);
 
+  const challengesRefreshSignal = refreshSignal + challengeRefreshBump;
+  const onBattleFlowCreated = useCallback(async () => {
+    await refreshBattles();
+    setChallengeRefreshBump((n) => n + 1);
+  }, [refreshBattles]);
+
   useEffect(() => {
     void refreshBattles().catch(() => {});
   }, [refreshBattles, refreshSignal]);
 
-  useEffect(() => {
-    if (!resolvedSocialApiBaseUrl) return;
-    battlePollRef.current = setInterval(() => {
-      void refreshBattles().catch(() => {});
-    }, 15_000);
-    return () => {
-      if (battlePollRef.current) clearInterval(battlePollRef.current);
-    };
-  }, [resolvedSocialApiBaseUrl, refreshBattles]);
-
-  useEffect(() => {
-    const q = battleMapQuery.trim();
-    if (q.length < 2) {
-      setBattleMapResults([]);
-      return;
-    }
-    const t = setTimeout(() => {
-      void (async () => {
-        setBattleMapSearching(true);
-        try {
-          const res = await invoke<Record<string, unknown>>("search_beatmapsets", {
-            input: { q, s: "ranked", sort: "plays_desc", m: 0 },
-          });
-          const sets = (res.beatmapsets as unknown[]) || [];
-          const out: Array<{ id: number; title: string; artist: string; starRange: string | null }> = [];
-          for (const x of sets.slice(0, 12)) {
-            const r = asRecord(x);
-            const id = Number(r.id);
-            if (!Number.isFinite(id)) continue;
-            out.push({
-              id,
-              title: String(r.title ?? ""),
-              artist: String(r.artist ?? ""),
-              starRange: osuRankedStarRangeFromBeatmapset(r),
-            });
-          }
-          setBattleMapResults(out);
-        } catch {
-          setBattleMapResults([]);
-        } finally {
-          setBattleMapSearching(false);
-        }
-      })();
-    }, 380);
-    return () => clearTimeout(t);
-  }, [battleMapQuery]);
-
-  useEffect(() => {
-    if (!battlePick) return;
-    if (!battleMapResults.some((m) => m.id === battlePick.id)) {
-      setBattlePick(null);
-      setBattleMapSelectValue("");
-    }
-  }, [battleMapResults, battlePick]);
-
-  useEffect(() => {
-    if (!battlePick || !battleRelativePp) {
-      setBattleDiffOptions([{ value: "", label: "Any difficulty" }]);
-      setBattleDiffValue("");
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId: battlePick.id });
-        const root = asRecord(raw);
-        const bms = root.beatmaps;
-        const opts: NeuSelectOption[] = [{ value: "", label: "Any difficulty (relative PP)" }];
-        if (Array.isArray(bms)) {
-          for (const x of bms) {
-            const bm = asRecord(x);
-            if (String(bm.mode ?? "") !== "osu") continue;
-            const st = String(bm.status ?? "").toLowerCase();
-            if (st && st !== "ranked") continue;
-            const id = Number(bm.id);
-            const stars = Number(bm.difficulty_rating);
-            const ver = String(bm.version ?? "Beatmap").trim() || "Beatmap";
-            if (!Number.isFinite(id)) continue;
-            opts.push({
-              value: String(id),
-              label: Number.isFinite(stars) ? `${ver} (${stars.toFixed(1)}★)` : ver,
-            });
-          }
-        }
-        if (!cancelled) {
-          setBattleDiffOptions(opts);
-          const pending = pendingRematchBmRef.current;
-          if (pending != null) {
-            const want = String(pending);
-            pendingRematchBmRef.current = null;
-            if (opts.some((o) => o.value === want)) {
-              setBattleDiffValue(want);
-            } else {
-              setBattleDiffValue("");
-            }
-          } else {
-            setBattleDiffValue("");
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setBattleDiffOptions([{ value: "", label: "Any difficulty" }]);
-          setBattleDiffValue("");
-          pendingRematchBmRef.current = null;
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [battlePick, battleRelativePp]);
-
-  const battleMapSelectOptions: NeuSelectOption[] = useMemo(() => {
-    const hint = battleMapSearching ? "Searching…" : "Search below, then choose a set…";
-    const opts: NeuSelectOption[] = [{ value: "", label: hint }];
-    for (const m of battleMapResults) {
-      const starBit = m.starRange ? ` · ${m.starRange}` : "";
-      opts.push({
-        value: String(m.id),
-        label: `${m.artist} — ${m.title} (#${m.id})${starBit}`,
-      });
-    }
-    return opts;
-  }, [battleMapResults, battleMapSearching]);
+  useBattlePoll({
+    resolvedSocialApiBaseUrl,
+    refreshBattles,
+    battles,
+    selfOsuId,
+  });
 
   const battleParticipantKey = useMemo(() => {
     const s = new Set<number>();
@@ -365,7 +210,8 @@ export function BattlesPanel({
       .filter((n) => Number.isFinite(n) && n > 0);
     let cancelled = false;
     void (async () => {
-      const m = new Map<number, number | null>();
+      const mBase = new Map<number, number | null>();
+      const mStars = new Map<number, number | null>();
       for (const osuId of ids) {
         if (cancelled) return;
         try {
@@ -374,15 +220,22 @@ export function BattlesPanel({
             limit: 100,
             mode: "osu",
           });
-          m.set(osuId, baselinePpPerStarFromBestScores(raw));
+          mBase.set(osuId, baselinePpPerStarFromBestScores(raw));
+          mStars.set(osuId, medianStarsFromBestScores(raw));
         } catch {
-          m.set(osuId, null);
+          mBase.set(osuId, null);
+          mStars.set(osuId, null);
         }
       }
       if (cancelled) return;
       setBaselinePpByOsuId((prev) => {
         const next = new Map(prev);
-        for (const [k, v] of m) next.set(k, v);
+        for (const [k, v] of mBase) next.set(k, v);
+        return next;
+      });
+      setMedianStarsByOsuId((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of mStars) next.set(k, v);
         return next;
       });
     })();
@@ -492,6 +345,73 @@ export function BattlesPanel({
     };
   }, [battles, hydratedTitles]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    const jobs: Array<{ setId: number; bmId: number }> = [];
+    for (const raw of battles) {
+      const r = asRecord(raw);
+      if (Number(r.relative_pp) !== 1) continue;
+      const bmId = r.beatmap_id != null ? Number(r.beatmap_id) : null;
+      const setId = Number(r.beatmapset_id);
+      if (bmId == null || !Number.isFinite(bmId) || !Number.isFinite(setId)) continue;
+      if (fixedBeatmapDetailById.has(bmId)) continue;
+      if (fixedBeatmapInFlightRef.current.has(bmId)) continue;
+      fixedBeatmapInFlightRef.current.add(bmId);
+      jobs.push({ setId, bmId });
+    }
+    if (jobs.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const { setId, bmId } of jobs) {
+        if (cancelled) {
+          fixedBeatmapInFlightRef.current.delete(bmId);
+          continue;
+        }
+        try {
+          const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId: setId });
+          const root = asRecord(raw);
+          const bms = root.beatmaps;
+          let detail: FixedBeatmapDetail | null = null;
+          if (Array.isArray(bms)) {
+            for (const x of bms) {
+              const bm = asRecord(x);
+              if (Number(bm.id) !== bmId) continue;
+              const stars = Number(bm.difficulty_rating);
+              detail = {
+                version: String(bm.version ?? "Beatmap").trim() || "Beatmap",
+                stars: Number.isFinite(stars) ? stars : NaN,
+              };
+              break;
+            }
+          }
+          if (!cancelled) {
+            setFixedBeatmapDetailById((prev) => {
+              const next = new Map(prev);
+              next.set(bmId, detail);
+              return next;
+            });
+          }
+        } catch {
+          if (!cancelled) {
+            setFixedBeatmapDetailById((prev) => {
+              const next = new Map(prev);
+              next.set(bmId, null);
+              return next;
+            });
+          }
+        } finally {
+          fixedBeatmapInFlightRef.current.delete(bmId);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      for (const j of jobs) {
+        fixedBeatmapInFlightRef.current.delete(j.bmId);
+      }
+    };
+  }, [battles, fixedBeatmapDetailById]);
+
   const mapLineForBattle = useCallback(
     (r: Record<string, unknown>) => {
       const sid = Number(r.beatmapset_id);
@@ -511,7 +431,7 @@ export function BattlesPanel({
   );
 
   const fighterSubtitle = useCallback(
-    (osuId: number, relativePpBattle: boolean) => {
+    (osuId: number, relativePpBattle: boolean, fixedBeatmapId: number | null) => {
       const rank = rankByOsuId.get(osuId);
       const rankBit = rank && !rank.isEmpty ? `${rank.name} (${rank.shortLabel})` : "—";
       const b = baselinePpByOsuId.get(osuId);
@@ -521,17 +441,29 @@ export function BattlesPanel({
           : relativePpBattle
             ? " · baseline —"
             : "";
+      const med = medianStarsByOsuId.get(osuId);
+      const tierBit =
+        relativePpBattle && fixedBeatmapId == null && med != null && Number.isFinite(med) && med > 0
+          ? ` · ~${med.toFixed(1)}★ assigned (±${ASSIGNED_STAR_MAX_DELTA}★)`
+          : relativePpBattle && fixedBeatmapId != null && Number.isFinite(fixedBeatmapId)
+            ? ` · fixed map #${fixedBeatmapId}`
+            : "";
+      const fighterTitle = relativePpBattle
+        ? fixedBeatmapId != null && Number.isFinite(fixedBeatmapId)
+          ? "Submit from osu! only counts ranked plays on the fixed beatmap."
+          : med != null && Number.isFinite(med) && med > 0
+            ? `Assigned ~${med.toFixed(1)}★ from top plays. Submit from osu! only accepts recent plays on this set within ±${ASSIGNED_STAR_MAX_DELTA}★ of that star rating.`
+            : "Relative PP vs baseline from top plays."
+        : "Performance tier from osu! stats.";
       return (
-        <span
-          className="battles-panel__fighter-sub"
-          title="Performance tier from osu! stats; baseline from top plays (relative PP)."
-        >
+        <span className="battles-panel__fighter-sub" title={fighterTitle}>
           {rankBit}
           {baseBit}
+          {tierBit}
         </span>
       );
     },
-    [rankByOsuId, baselinePpByOsuId],
+    [rankByOsuId, baselinePpByOsuId, medianStarsByOsuId],
   );
 
   const applyRematch = useCallback(
@@ -540,95 +472,24 @@ export function BattlesPanel({
       const opponent = Number(r.opponent_osu_id);
       const other = selfOsuId === creator ? opponent : creator;
       const friendVal = friendSelectOptions.some((o) => o.value === String(other) && o.value !== "");
-      if (friendVal) {
-        setBattleOpponentFriend(String(other));
-        setBattleOpponentManual("");
-      } else {
-        setBattleOpponentManual(String(other));
-        setBattleOpponentFriend("");
-      }
-      const sid = Number(r.beatmapset_id);
       const disp = r.display as { title?: string; artist?: string } | undefined;
-      setBattlePick({
-        id: sid,
+      const sid = Number(r.beatmapset_id);
+      const rel = Number(r.relative_pp) === 1;
+      const fbm = r.beatmap_id != null ? Number(r.beatmap_id) : null;
+      setRematchSeed({
+        opponentFriend: friendVal ? String(other) : "",
+        opponentManual: friendVal ? "" : String(other),
+        beatmapsetId: sid,
         title: String(disp?.title ?? "").trim() || "—",
         artist: String(disp?.artist ?? "").trim() || "—",
-        starRange: null,
+        relativePp: rel,
+        fixedBeatmapId: rel && fbm != null && Number.isFinite(fbm) ? fbm : null,
       });
-      setBattleMapSelectValue(String(sid));
-      const rel = Number(r.relative_pp) === 1;
-      setBattleRelativePp(rel);
-      const fbm = r.beatmap_id != null ? Number(r.beatmap_id) : null;
-      if (rel && fbm != null && Number.isFinite(fbm)) {
-        pendingRematchBmRef.current = fbm;
-      } else {
-        pendingRematchBmRef.current = null;
-      }
-      setBattleMapQuery("");
-      setBattleMapResults([]);
-      onToast("info", "Rematch — confirm time limit and start battle.");
-      document.querySelector(".battles-panel__new")?.scrollIntoView({ behavior: "smooth" });
     },
-    [selfOsuId, friendSelectOptions, onToast],
+    [selfOsuId, friendSelectOptions],
   );
 
   const uiLocked = busy;
-
-  const createBattle = async () => {
-    const opp =
-      battleOpponentFriend !== "" ? Number(battleOpponentFriend) : Number(battleOpponentManual.trim());
-    if (!battlePick || !Number.isFinite(opp)) {
-      onToast("error", "Choose an opponent and a beatmap set.");
-      return;
-    }
-    let windowEndMs: number | null = null;
-    if (battleDeadlinePreset === "custom") {
-      if (!battleDeadlineCustom.trim()) {
-        onToast("error", "Pick an end date and time for the battle window.");
-        return;
-      }
-      const ms = new Date(battleDeadlineCustom).getTime();
-      windowEndMs = Number.isFinite(ms) ? ms : null;
-    } else if (battleDeadlinePreset) {
-      const offset = Number(battleDeadlinePreset);
-      windowEndMs = Number.isFinite(offset) ? Date.now() + offset : null;
-    }
-    if (windowEndMs == null || !Number.isFinite(windowEndMs) || windowEndMs <= Date.now()) {
-      onToast("error", "Choose a valid time limit (end must be in the future).");
-      return;
-    }
-    setBusy(true);
-    try {
-      const body: Record<string, unknown> = {
-        opponentOsuId: opp,
-        beatmapsetId: battlePick.id,
-        windowEndMs,
-        display: { title: battlePick.title, artist: battlePick.artist },
-      };
-      if (battleRelativePp) {
-        body.relativePp = true;
-        if (battleDiffValue.trim()) {
-          const bid = Number(battleDiffValue);
-          if (Number.isFinite(bid)) body.beatmapId = bid;
-        }
-      }
-      await socialPost("/api/v1/battles", body);
-      onToast("success", "Battle created.");
-      setBattleMapQuery("");
-      setBattleMapResults([]);
-      setBattlePick(null);
-      setBattleMapSelectValue("");
-      setBattleRelativePp(true);
-      setBattleDiffValue("");
-      setBattleDeadlinePreset("");
-      setBattleDeadlineCustom("");
-      await refreshBattles();
-    } catch (e) {
-      onToast("error", String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const submitBattleFromOsu = async (
     battleId: number,
@@ -689,7 +550,7 @@ export function BattlesPanel({
     }
   };
 
-  const { activeBattles, historyBattles } = useMemo(() => {
+  const { activeBattles, historyBattles, activeBattlesSorted } = useMemo(() => {
     const active: unknown[] = [];
     const hist: unknown[] = [];
     const now = Date.now();
@@ -702,184 +563,24 @@ export function BattlesPanel({
       if (isHistory) hist.push(b);
       else active.push(b);
     }
-    return { activeBattles: active, historyBattles: hist };
-  }, [battles]);
-
-  const renderBattleCard = (raw: unknown) => {
-    const r = asRecord(raw);
-    const id = Number(r.id);
-    const creator = Number(r.creator_osu_id);
-    const opponent = Number(r.opponent_osu_id);
-    const setId = Number(r.beatmapset_id);
-    const end = Number(r.window_end);
-    const state = String(r.state);
-    const winner = r.winner_osu_id != null ? Number(r.winner_osu_id) : null;
-    const relativePpBattle = Number(r.relative_pp) === 1;
-    const fixedBattleBm = r.beatmap_id != null ? Number(r.beatmap_id) : null;
-    const windowOpen = Number.isFinite(end) && Date.now() <= end;
-    const canTrySubmit = state !== "closed" && windowOpen;
-    const scoresRaw = r.scores;
-    const scoreList = Array.isArray(scoresRaw) ? scoresRaw.map((x) => asRecord(x as Record<string, unknown>)) : [];
-    const myScore = scoreList.find((s) => Number(s.user_osu_id) === selfOsuId);
-
-    let statusBadge = "";
-    let statusClass = "battles-panel__status battles-panel__status--open";
-    if (state === "closed") {
-      if (winner == null) {
-        statusBadge = "Finished · no winner";
-        statusClass = "battles-panel__status battles-panel__status--muted";
-      } else if (selfOsuId != null && winner === selfOsuId) {
-        statusBadge = "You won";
-        statusClass = "battles-panel__status battles-panel__status--win";
-      } else {
-        statusBadge = "You lost";
-        statusClass = "battles-panel__status battles-panel__status--loss";
-      }
-    } else if (!windowOpen) {
-      statusBadge = "Window ended";
-      statusClass = "battles-panel__status battles-panel__status--muted";
-    } else if (scoreList.length >= 2) {
-      statusBadge = "Both submitted";
-      statusClass = "battles-panel__status battles-panel__status--done";
-    } else if (scoreList.length === 1) {
-      statusBadge = myScore ? "Awaiting opponent" : "Opponent submitted — your turn";
-      statusClass = "battles-panel__status battles-panel__status--wait";
-    } else {
-      statusBadge = "Open";
-      statusClass = "battles-panel__status battles-panel__status--open";
-    }
-
-    const scoresLine =
-      scoreList.length > 0 ? (
-        <ul className="battles-panel__scores" aria-label="Submitted scores">
-          {scoreList.map((s) => {
-            const uid = Number(s.user_osu_id);
-            const sc = Number(s.score);
-            const rv = s.rank_value != null ? Number(s.rank_value) : null;
-            const ppV = s.pp != null ? Number(s.pp) : null;
-            const starsV = s.stars != null ? Number(s.stars) : null;
-            const unweighted = Boolean(s.is_unweighted);
-            let line: string;
-            if (relativePpBattle && unweighted) {
-              line = `${displayNameForOsu(uid)} — ${Number.isFinite(sc) ? sc.toLocaleString() : "—"} (raw)`;
-            } else if (relativePpBattle && rv != null && Number.isFinite(rv)) {
-              const starBit = starsV != null && Number.isFinite(starsV) ? `★${starsV.toFixed(1)} · ` : "";
-              const ppBit = ppV != null && Number.isFinite(ppV) ? `${ppV.toFixed(0)}pp · ` : "";
-              line = `${displayNameForOsu(uid)} — ${starBit}${ppBit}${rv.toFixed(2)}×`;
-            } else {
-              line = `${displayNameForOsu(uid)}: ${Number.isFinite(sc) ? sc.toLocaleString() : "—"}`;
-            }
-            return (
-              <li key={uid}>
-                {line}
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <p className="hint battles-panel__no-scores">No scores submitted yet.</p>
-      );
-
-    const remaining = Number.isFinite(end) ? end - Date.now() : 0;
-    const countdown =
-      canTrySubmit && Number.isFinite(end) ? (
-        <span
-          key={tick}
-          className="battles-panel__countdown"
-          title={new Date(end).toLocaleString()}
-        >
-          {formatTimeRemaining(remaining)} left
-        </span>
-      ) : null;
-
-    return (
-      <li key={id} className="battles-panel__card">
-        <div className="battles-panel__card-main">
-          <div className="battles-panel__card-head">
-            <span className="battles-panel__map-title">{mapLineForBattle(r)}</span>
-            <span className={statusClass}>{statusBadge}</span>
-          </div>
-          <div className="battles-panel__fighters" aria-label="Players">
-            <div className="battles-panel__fighter">
-              <span className="battles-panel__fighter-name">{displayNameForOsu(creator)}</span>
-              {fighterSubtitle(creator, relativePpBattle)}
-            </div>
-            <span className="hint battles-panel__vs">vs</span>
-            <div className="battles-panel__fighter">
-              <span className="battles-panel__fighter-name">{displayNameForOsu(opponent)}</span>
-              {fighterSubtitle(opponent, relativePpBattle)}
-            </div>
-          </div>
-          <div className="battles-panel__card-tools">
-            <button type="button" className="secondary small-btn" onClick={() => setDetailBattleId(id)}>
-              Details
-            </button>
-            {state === "closed" && selfOsuId != null && (selfOsuId === creator || selfOsuId === opponent) ? (
-              <button type="button" className="secondary small-btn" onClick={() => applyRematch(r)}>
-                Rematch
-              </button>
-            ) : null}
-          </div>
-          <span className="hint battles-panel__meta">
-            #{id}
-            {Number.isFinite(setId) ? ` · set ${setId}` : ""}
-            {relativePpBattle ? " · relative PP" : ""}
-            {fixedBattleBm != null && Number.isFinite(fixedBattleBm) ? ` · fixed beatmap ${fixedBattleBm}` : ""}
-            {Number.isFinite(end) ? ` · ends ${new Date(end).toLocaleString()}` : ""}
-            {countdown ? (
-              <>
-                {" "}
-                · {countdown}
-              </>
-            ) : null}
-          </span>
-          {scoresLine}
-        </div>
-        {canTrySubmit && (
-          <div className="battles-panel__card-actions">
-            <button
-              type="button"
-              className="primary small-btn"
-              disabled={uiLocked}
-              onClick={() =>
-                void submitBattleFromOsu(id, setId, {
-                  relativePp: relativePpBattle,
-                  fixedBeatmapId:
-                    fixedBattleBm != null && Number.isFinite(fixedBattleBm) ? fixedBattleBm : null,
-                })
-              }
-            >
-              Submit from osu!
-            </button>
-            <button
-              type="button"
-              className="secondary small-btn"
-              disabled={uiLocked}
-              onClick={() => openScoreModal(id, relativePpBattle)}
-            >
-              Enter score…
-            </button>
-          </div>
-        )}
-        {!canTrySubmit &&
-        selfOsuId != null &&
-        (selfOsuId === creator || selfOsuId === opponent) &&
-        !myScore &&
-        (state === "closed" || !windowOpen) ? (
-          <p className="hint battles-panel__missed">You did not submit a score for this battle.</p>
-        ) : null}
-      </li>
-    );
-  };
+    return {
+      activeBattles: active,
+      historyBattles: hist,
+      activeBattlesSorted: sortActiveBattlesByPriority(active, selfOsuId),
+    };
+  }, [battles, selfOsuId]);
 
   return (
     <div className="social-section battles-panel social-battle-view">
-      <div className="social-subview-head">
+      <div className="social-subview-head battles-panel__head">
         <p className="panel-sub panel-sub--tight battles-panel__lede">
-          1v1 on a ranked set: submit from osu! or enter a score. Relative PP (vs your PP/★ curve) is the default, like
-          Challenges. The server picks a winner when the window ends or both players have submitted.
+          <strong>1v1 battles</strong> on a ranked set — submit from osu! or type a score. Relative PP is the default;
+          open challenges use the same flow (pick <strong>Open challenge</strong> in the form below).
         </p>
-        <label className="field field--checkbox battles-panel__auto-submit">
+        <label
+          className="field field--checkbox battles-panel__auto-submit"
+          title='Checks about every 4 minutes while you have an open battle and no score yet. Same rules as “Submit from osu!”.'
+        >
           <input
             type="checkbox"
             checked={autoSubmitEnabled}
@@ -890,167 +591,86 @@ export function BattlesPanel({
               setAutoSubmitEnabled(on);
             }}
           />
-          <span>
-            Auto-submit from osu! (every ~4 min when you have an open battle and no submission yet — same rules as
-            “Submit from osu!”)
-          </span>
+          <span>Auto-submit from osu!</span>
         </label>
       </div>
 
-      <details className="social-compose-details battles-panel__new" open>
-        <summary className="social-compose-details__summary">Start a new battle</summary>
-        <div className="social-compose-shell battles-panel__form">
-          <div className="grid-2">
-            <label className="field">
-              <span>Opponent</span>
-              <NeuSelect
-                value={battleOpponentFriend}
-                disabled={uiLocked}
-                options={friendSelectOptions}
-                onChange={(v) => {
-                  setBattleOpponentFriend(v);
-                  if (v) setBattleOpponentManual("");
-                }}
-              />
-            </label>
-            <label className="field">
-              <span>Or osu! user id</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={battleOpponentManual}
-                onChange={(e) => {
-                  setBattleOpponentManual(e.target.value);
-                  if (e.target.value.trim()) setBattleOpponentFriend("");
-                }}
-                placeholder="Anyone not in the list"
-              />
-            </label>
-          </div>
-          <div className="battle-map-panel">
-            <div className="battle-map-panel-header">
-              <span className="battle-map-panel-title">Map</span>
-              <span className="battle-map-panel-sub">Ranked beatmaps · search, then pick from the list</span>
-            </div>
-            <label className="field battle-map-search-field">
-              <span>Search</span>
-              <input
-                type="search"
-                value={battleMapQuery}
-                onChange={(e) => setBattleMapQuery(e.target.value)}
-                placeholder="Type at least 2 characters…"
-                autoComplete="off"
-              />
-            </label>
-            {battleMapSearching && (
-              <p className="hint battle-map-search-status" aria-live="polite">
-                Searching…
-              </p>
-            )}
-            <label className="field">
-              <span>Beatmap set</span>
-              <NeuSelect
-                value={battleMapSelectValue}
-                disabled={uiLocked}
-                options={battleMapSelectOptions}
-                onChange={(v) => {
-                  setBattleMapSelectValue(v);
-                  if (!v) {
-                    setBattlePick(null);
-                    return;
-                  }
-                  const m = battleMapResults.find((x) => String(x.id) === v);
-                  setBattlePick(m ?? null);
-                }}
-              />
-            </label>
-            {battlePick && (
-              <div className="battle-selected-strip">
-                <span className="battle-selected-label">Selected map</span>
-                <p className="battle-selected-body">
-                  <strong>{battlePick.title}</strong>
-                  <span className="battle-selected-dash"> — </span>
-                  {battlePick.artist}
-                  <span className="hint battle-selected-set">
-                    {" "}
-                    · set {battlePick.id}
-                    {battlePick.starRange ? ` · ${battlePick.starRange}` : ""}
-                  </span>
-                </p>
-              </div>
-            )}
-            <label className="field field--checkbox">
-              <input
-                type="checkbox"
-                checked={battleRelativePp}
-                disabled={uiLocked}
-                onChange={(e) => setBattleRelativePp(e.target.checked)}
-              />
-              <span>Relative PP (vs your baseline)</span>
-            </label>
-            {battleRelativePp && battlePick && (
-              <label className="field">
-                <span>Difficulty</span>
-                <NeuSelect
-                  value={battleDiffValue}
-                  disabled={uiLocked}
-                  options={battleDiffOptions}
-                  onChange={(v) => setBattleDiffValue(v)}
-                />
-              </label>
-            )}
-          </div>
-          <div className="grid-2">
-            <label className="field">
-              <span>Time limit</span>
-              <NeuSelect
-                value={battleDeadlinePreset}
-                disabled={uiLocked}
-                options={BATTLE_WINDOW_PRESET_OPTIONS}
-                onChange={(v) => {
-                  setBattleDeadlinePreset(v);
-                  if (v !== "custom") setBattleDeadlineCustom("");
-                }}
-              />
-            </label>
-            {battleDeadlinePreset === "custom" && (
-              <label className="field">
-                <span>End date &amp; time</span>
-                <input
-                  type="datetime-local"
-                  value={battleDeadlineCustom}
-                  onChange={(e) => setBattleDeadlineCustom(e.target.value)}
-                />
-              </label>
-            )}
-          </div>
-          <div className="row-actions row-actions--spaced battles-panel__primary-row">
-            <button type="button" className="primary" disabled={uiLocked} onClick={() => void createBattle()}>
-              Start battle
-            </button>
-          </div>
-        </div>
-      </details>
+      <BattleNewFlow
+        uiLocked={uiLocked}
+        friendSelectOptions={friendSelectOptions}
+        selfOsuId={selfOsuId}
+        displayNameForOsu={displayNameForOsu}
+        onToast={onToast}
+        socialPost={socialPost}
+        setBusy={setBusy}
+        onCreated={onBattleFlowCreated}
+        rematchSeed={rematchSeed}
+        onRematchConsumed={consumeRematchSeed}
+      />
 
-      <section className="battles-panel__section social-list-section" aria-labelledby="battles-active-heading">
+      <section className="battles-panel__section social-list-section battles-panel__list-section--stagger" aria-labelledby="battles-active-heading">
         <h3 id="battles-active-heading" className="social-list-section__title">
           Active
         </h3>
         {activeBattles.length > 0 ? (
-          <ul className="social-list battles-panel__list">{activeBattles.map((b) => renderBattleCard(b))}</ul>
+          <ul className="social-list battles-panel__list battles-panel__list--active">
+            {activeBattlesSorted.map((b) => {
+              const r = asRecord(b);
+              const id = Number(r.id);
+              return (
+                <BattleCard
+                  key={id}
+                  raw={b}
+                  selfOsuId={selfOsuId}
+                  tick={tick}
+                  uiLocked={uiLocked}
+                  mapTitle={mapLineForBattle(r)}
+                  displayNameForOsu={displayNameForOsu}
+                  fighterSubtitle={fighterSubtitle}
+                  onOpenDetails={setDetailBattleId}
+                  onRematch={applyRematch}
+                  onSubmitFromOsu={submitBattleFromOsu}
+                  onOpenScoreModal={openScoreModal}
+                />
+              );
+            })}
+          </ul>
         ) : (
           <div className="social-card social-empty-card">
-            <p className="hint social-empty-card-text">No active battles. Start one above, or wait for a friend to challenge you.</p>
+            <p className="hint social-empty-card-text">
+              No active battles. Start one above, or wait for a friend to challenge you.
+            </p>
           </div>
         )}
       </section>
 
-      <section className="battles-panel__section social-list-section" aria-labelledby="battles-history-heading">
+      <section className="battles-panel__section social-list-section battles-panel__list-section--stagger" aria-labelledby="battles-history-heading">
         <h3 id="battles-history-heading" className="social-list-section__title">
           History
         </h3>
         {historyBattles.length > 0 ? (
-          <ul className="social-list battles-panel__list">{historyBattles.map((b) => renderBattleCard(b))}</ul>
+          <ul className="social-list battles-panel__list">
+            {historyBattles.map((b) => {
+              const r = asRecord(b);
+              const id = Number(r.id);
+              return (
+                <BattleCard
+                  key={id}
+                  raw={b}
+                  selfOsuId={selfOsuId}
+                  tick={tick}
+                  uiLocked={uiLocked}
+                  mapTitle={mapLineForBattle(r)}
+                  displayNameForOsu={displayNameForOsu}
+                  fighterSubtitle={fighterSubtitle}
+                  onOpenDetails={setDetailBattleId}
+                  onRematch={applyRematch}
+                  onSubmitFromOsu={submitBattleFromOsu}
+                  onOpenScoreModal={openScoreModal}
+                />
+              );
+            })}
+          </ul>
         ) : (
           <div className="social-card social-empty-card">
             <p className="hint social-empty-card-text">No past battles yet.</p>
@@ -1059,186 +679,43 @@ export function BattlesPanel({
       </section>
 
       {detailBattleId != null && (
-        <div
-          className="battles-panel__modal-backdrop"
-          role="presentation"
-          onClick={() => !uiLocked && setDetailBattleId(null)}
-        >
-          <div
-            className="battles-panel__modal battles-panel__modal--wide"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="battles-detail-modal-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h4 id="battles-detail-modal-title" className="battles-panel__modal-title">
-              Battle #{detailBattleId}
-            </h4>
-            {detailErr && <div className="error-banner">{detailErr}</div>}
-            {!detailPayload && !detailErr ? <p className="hint">Loading…</p> : null}
-            {detailPayload ? (
-              <div className="battles-panel__detail-body">
-                {(() => {
-                  const b = detailPayload.battle;
-                  const setId = Number(b.beatmapset_id);
-                  const ws = Number(b.window_start);
-                  const we = Number(b.window_end);
-                  const rel = Number(b.relative_pp) === 1;
-                  const fbm = b.beatmap_id != null ? Number(b.beatmap_id) : null;
-                  const w = b.winner_osu_id != null ? Number(b.winner_osu_id) : null;
-                  const st = String(b.state ?? "");
-                  const mapHref = Number.isFinite(setId) ? `https://osu.ppy.sh/beatmapsets/${setId}` : null;
-                  return (
-                    <>
-                      <p className="battles-panel__detail-map">{mapLineForBattle(b)}</p>
-                      {mapHref ? (
-                        <p>
-                          <a href={mapHref} target="_blank" rel="noreferrer">
-                            Open beatmap set
-                          </a>
-                          {Number.isFinite(setId) ? ` · set ${setId}` : ""}
-                        </p>
-                      ) : null}
-                      <ul className="battles-panel__detail-facts">
-                        <li>
-                          <strong>Window:</strong>{" "}
-                          {Number.isFinite(ws) ? new Date(ws).toLocaleString() : "—"} →{" "}
-                          {Number.isFinite(we) ? new Date(we).toLocaleString() : "—"}
-                        </li>
-                        <li>
-                          <strong>Mode:</strong> {rel ? "Relative PP" : "Raw score"}
-                        </li>
-                        {fbm != null && Number.isFinite(fbm) ? (
-                          <li>
-                            <strong>Fixed beatmap:</strong>{" "}
-                            <a href={`https://osu.ppy.sh/beatmaps/${fbm}`} target="_blank" rel="noreferrer">
-                              {fbm}
-                            </a>
-                          </li>
-                        ) : null}
-                        <li>
-                          <strong>State:</strong> {st}
-                          {w != null && Number.isFinite(w) ? (
-                            <>
-                              {" "}
-                              · <strong>Winner:</strong> {displayNameForOsu(w)}
-                            </>
-                          ) : null}
-                        </li>
-                      </ul>
-                      <h5 className="battles-panel__detail-scores-h">Submissions</h5>
-                      <ul className="battles-panel__detail-scores">
-                        {detailPayload.scores.length === 0 ? (
-                          <li className="hint">No scores yet.</li>
-                        ) : (
-                          detailPayload.scores.map((raw, i) => {
-                            const s = asRecord(raw);
-                            const uid = Number(s.user_osu_id);
-                            const sc = Number(s.score);
-                            const at = Number(s.submitted_at);
-                            const mods = s.mods != null ? Number(s.mods) : 0;
-                            const rv = s.rank_value != null ? Number(s.rank_value) : null;
-                            const ppV = s.pp != null ? Number(s.pp) : null;
-                            const stV = s.stars != null ? Number(s.stars) : null;
-                            const pbm = s.play_beatmap_id != null ? Number(s.play_beatmap_id) : null;
-                            const base = s.baseline_pp_per_star != null ? Number(s.baseline_pp_per_star) : null;
-                            const unweighted = Boolean(s.is_unweighted);
-                            return (
-                              <li key={i}>
-                                <strong>{displayNameForOsu(uid)}</strong>
-                                {Number.isFinite(at) ? (
-                                  <span className="hint"> · {new Date(at).toLocaleString()}</span>
-                                ) : null}
-                                <br />
-                                Score: {Number.isFinite(sc) ? sc.toLocaleString() : "—"} · mods: {mods}
-                                {unweighted ? " · unweighted (raw)" : ""}
-                                {rv != null && Number.isFinite(rv) ? (
-                                  <>
-                                    <br />
-                                    PP: {ppV != null && Number.isFinite(ppV) ? `${ppV.toFixed(0)} · ` : ""}
-                                    {stV != null && Number.isFinite(stV) ? `★${stV.toFixed(1)} · ` : ""}
-                                    {rv.toFixed(2)}× vs baseline
-                                    {base != null && Number.isFinite(base) ? ` (baseline ~${base.toFixed(1)}pp/★)` : ""}
-                                  </>
-                                ) : null}
-                                {pbm != null && Number.isFinite(pbm) ? (
-                                  <>
-                                    <br />
-                                    Play:{" "}
-                                    <a
-                                      href={`https://osu.ppy.sh/beatmapsets/${setId}#osu/${pbm}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                    >
-                                      beatmap {pbm}
-                                    </a>
-                                  </>
-                                ) : null}
-                              </li>
-                            );
-                          })
-                        )}
-                      </ul>
-                    </>
-                  );
-                })()}
-              </div>
-            ) : null}
-            <div className="battles-panel__modal-actions">
-              <button type="button" className="primary" onClick={() => setDetailBattleId(null)}>
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <BattleDetailModal
+          detailBattleId={detailBattleId}
+          uiLocked={uiLocked}
+          detailErr={detailErr}
+          detailPayload={detailPayload}
+          mapLineForBattle={mapLineForBattle}
+          displayNameForOsu={displayNameForOsu}
+          medianStarsByOsuId={medianStarsByOsuId}
+          fixedBeatmapDetailById={fixedBeatmapDetailById}
+          onOpenInOsuError={(msg) => onToast("error", msg)}
+          onClose={() => setDetailBattleId(null)}
+        />
       )}
 
       {scoreModal && (
-        <div
-          className="battles-panel__modal-backdrop"
-          role="presentation"
-          onClick={() => !uiLocked && setScoreModal(null)}
-        >
-          <div
-            className="battles-panel__modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="battles-score-modal-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h4 id="battles-score-modal-title" className="battles-panel__modal-title">
-              Enter score
-            </h4>
-            <p className="hint battles-panel__modal-hint">
-              {scoreModal.relativePp
-                ? "Honor system — manual entries are raw and rank below osu! submits in relative battles."
-                : "Honor system — use your best score on this map."}
-            </p>
-            <label className="field">
-              <span>Score</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                autoFocus
-                value={scoreDraft}
-                onChange={(e) => setScoreDraft(e.target.value)}
-                placeholder="e.g. 1234567"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void confirmScoreModal();
-                }}
-              />
-            </label>
-            <div className="battles-panel__modal-actions">
-              <button type="button" className="secondary" disabled={uiLocked} onClick={() => setScoreModal(null)}>
-                Cancel
-              </button>
-              <button type="button" className="primary" disabled={uiLocked} onClick={() => void confirmScoreModal()}>
-                Submit
-              </button>
-            </div>
-          </div>
-        </div>
+        <BattleScoreModal
+          relativePp={scoreModal.relativePp}
+          scoreDraft={scoreDraft}
+          uiLocked={uiLocked}
+          onScoreDraftChange={setScoreDraft}
+          onCancel={() => setScoreModal(null)}
+          onConfirm={confirmScoreModal}
+        />
       )}
+
+      <ChallengesPanel
+        embeddedInBattles
+        onToast={onToast}
+        socialGet={socialGet}
+        socialPost={socialPost}
+        meId={meId}
+        oauthOsuId={oauthOsuId}
+        displayNameForOsu={displayNameForOsu}
+        resolvedSocialApiBaseUrl={resolvedSocialApiBaseUrl}
+        refreshSignal={challengesRefreshSignal}
+        refreshBusy={refreshBusy}
+      />
     </div>
   );
 }

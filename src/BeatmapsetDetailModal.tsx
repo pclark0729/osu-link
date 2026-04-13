@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import type { Mode } from "./searchTypes";
+import { BeatmapsetDetailLoadingSkeleton } from "./Skeleton";
 import { formatAvgPp, useBeatmapAvgPp } from "./useBeatmapAvgPp";
 
 export type BeatmapsetDetailTarget = {
@@ -284,11 +285,7 @@ export function BeatmapsetDetailModal({
           </button>
         </div>
 
-        {loadingSet && (
-          <p className="hint" aria-live="polite">
-            Loading beatmap set…
-          </p>
-        )}
+        {loadingSet ? <BeatmapsetDetailLoadingSkeleton /> : null}
         {fetchError && (
           <p className="error-banner" role="alert">
             {fetchError}

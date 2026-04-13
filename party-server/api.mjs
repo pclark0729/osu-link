@@ -35,8 +35,26 @@ function pair(a, b) {
   return x < y ? [x, y] : [y, x];
 }
 
+/** @param {Record<string, unknown>} ch */
+function rulesJsonObjFromChallengeRow(ch) {
+  const raw = ch.rules_json;
+  if (raw == null || String(raw).trim() === "") return {};
+  try {
+    const o = JSON.parse(String(raw));
+    return o && typeof o === "object" ? /** @type {Record<string, unknown>} */ (o) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Open to all signed-in users — no Join required; submit auto-adds to participants. */
+function isGlobalChallengeRow(ch) {
+  return Boolean(rulesJsonObjFromChallengeRow(ch).global);
+}
+
 /**
- * Same ordering as challenge standings: weighted (finite rank_value) before unweighted; then higher rank_value; tie-break score.
+ * Same ordering as challenge standings: weighted (finite rank_value) before unweighted; then higher rank_value; then score.
+ * Tie-break: earlier submission wins (lower submitted_at).
  * @param {Record<string, unknown>} a
  * @param {Record<string, unknown>} b
  * @returns {number}
@@ -45,8 +63,16 @@ function compareChallengeLikeScores(a, b) {
   const aW = a.rank_value != null && Number.isFinite(Number(a.rank_value));
   const bW = b.rank_value != null && Number.isFinite(Number(b.rank_value));
   if (aW !== bW) return aW ? -1 : 1;
-  if (aW && bW) return Number(b.rank_value) - Number(a.rank_value);
-  return Number(b.score) - Number(a.score);
+  if (aW && bW) {
+    const rv = Number(b.rank_value) - Number(a.rank_value);
+    if (rv !== 0) return rv;
+  } else {
+    const sc = Number(b.score) - Number(a.score);
+    if (sc !== 0) return sc;
+  }
+  const ta = a.submitted_at != null && Number.isFinite(Number(a.submitted_at)) ? Number(a.submitted_at) : Infinity;
+  const tb = b.submitted_at != null && Number.isFinite(Number(b.submitted_at)) ? Number(b.submitted_at) : Infinity;
+  return ta - tb;
 }
 
 /**
@@ -315,6 +341,8 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       const ids = rows.map((r) => r.id);
       /** @type {Map<number, Array<Record<string, unknown>>>} */
       const standingsByChallenge = new Map();
+      /** @type {Map<number, Record<string, unknown>>} */
+      const myStandingByChallenge = new Map();
       if (ids.length > 0) {
         const ph = ids.map(() => "?").join(",");
         const scoreRows = db
@@ -351,12 +379,38 @@ export async function handleSocialApi(db, req, res, method, pathname) {
           });
           arr.splice(3);
         }
+
+        const myRows = db
+          .prepare(
+            `WITH ranked AS (
+               SELECT challenge_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY challenge_id, user_osu_id
+                   ORDER BY (rank_value IS NULL) ASC, rank_value DESC, score DESC
+                 ) AS rn
+               FROM score_submissions
+               WHERE challenge_id IN (${ph}) AND user_osu_id = ?
+             )
+             SELECT challenge_id, user_osu_id, score, rank_value, pp, stars, play_beatmap_id, baseline_pp_per_star, is_unweighted
+             FROM ranked WHERE rn = 1`,
+          )
+          .all(...ids, me);
+        for (const row of myRows) {
+          myStandingByChallenge.set(row.challenge_id, row);
+        }
       }
-      const out = rows.map((r) => ({
-        ...r,
-        i_am_in: Boolean(r.i_am_in),
-        standings_top: standingsByChallenge.get(r.id) ?? [],
-      }));
+      const out = rows.map((r) => {
+        const joined = Boolean(r.i_am_in);
+        const global = isGlobalChallengeRow(r);
+        const iAmIn = joined || global;
+        return {
+          ...r,
+          joined,
+          i_am_in: iAmIn,
+          standings_top: standingsByChallenge.get(r.id) ?? [],
+          my_standing: iAmIn ? (myStandingByChallenge.get(r.id) ?? null) : null,
+        };
+      });
       return json(res, 200, { challenges: out });
     }
 
@@ -419,7 +473,22 @@ export async function handleSocialApi(db, req, res, method, pathname) {
       if (ch.status !== "open" || ch.deadline <= Date.now()) {
         return json(res, 400, { error: "closed" });
       }
-      const part = db.prepare(`SELECT 1 FROM challenge_participants WHERE challenge_id = ? AND user_osu_id = ?`).get(id, me);
+      let part = db.prepare(`SELECT 1 FROM challenge_participants WHERE challenge_id = ? AND user_osu_id = ?`).get(id, me);
+      if (!part && isGlobalChallengeRow(ch)) {
+        try {
+          db.prepare(`INSERT INTO challenge_participants (challenge_id, user_osu_id, joined_at) VALUES (?, ?, ?)`).run(
+            id,
+            me,
+            Date.now(),
+          );
+          part = { 1: 1 };
+        } catch {
+          part = db.prepare(`SELECT 1 FROM challenge_participants WHERE challenge_id = ? AND user_osu_id = ?`).get(
+            id,
+            me,
+          );
+        }
+      }
       if (!part) return json(res, 403, { error: "not_participant" });
       const rv =
         !isUnweighted && rankValue != null && Number.isFinite(rankValue) ? rankValue : null;
@@ -681,7 +750,9 @@ function finalizeBattle(db, battleId) {
   const b = db.prepare(`SELECT * FROM async_battles WHERE id = ?`).get(battleId);
   if (!b || b.state === "closed") return;
   const scores = db
-    .prepare(`SELECT user_osu_id, score, rank_value, is_unweighted FROM score_submissions WHERE battle_id = ?`)
+    .prepare(
+      `SELECT user_osu_id, score, rank_value, is_unweighted, submitted_at FROM score_submissions WHERE battle_id = ?`,
+    )
     .all(battleId);
   const now = Date.now();
   const both =
@@ -699,8 +770,14 @@ function finalizeBattle(db, battleId) {
       const sorted = [...scores].sort(compareChallengeLikeScores);
       winner = sorted[0].user_osu_id;
     } else {
-      const best = scores.reduce((a, s) => (s.score > a.score ? s : a));
-      winner = best.user_osu_id;
+      const sorted = [...scores].sort((a, b) => {
+        const sc = Number(b.score) - Number(a.score);
+        if (sc !== 0) return sc;
+        const ta = a.submitted_at != null && Number.isFinite(Number(a.submitted_at)) ? Number(a.submitted_at) : Infinity;
+        const tb = b.submitted_at != null && Number.isFinite(Number(b.submitted_at)) ? Number(b.submitted_at) : Infinity;
+        return ta - tb;
+      });
+      winner = sorted[0].user_osu_id;
     }
   }
   db.prepare(`UPDATE async_battles SET state = 'closed', winner_osu_id = ? WHERE id = ?`).run(winner, battleId);

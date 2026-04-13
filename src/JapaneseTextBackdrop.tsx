@@ -6,9 +6,9 @@ const GLYPH_POOL =
   "アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン" +
   "日月火水木金土山川田人心手口目耳足上下左右大小新旧東西南北春夏秋冬光闇音楽星空雨雪風雲夢想希望";
 
-const MAX_CELLS = 5200;
-const OPACITY_MIN = 0.07;
-const OPACITY_MAX = 0.42;
+const MAX_CELLS = 3800;
+const OPACITY_MIN = 0.035;
+const OPACITY_MAX = 0.16;
 
 function mulberry32(seed: number): () => number {
   return function next() {
@@ -20,7 +20,7 @@ function mulberry32(seed: number): () => number {
 }
 
 function computeGridDims(w: number, h: number): { cols: number; rows: number } {
-  let cell = 11;
+  let cell = 15;
   while (cell < 220) {
     cell += 1;
     const cols = Math.max(1, Math.ceil(w / cell));

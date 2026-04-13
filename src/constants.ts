@@ -46,6 +46,12 @@ export const DEFAULT_HOTKEY_TRAIN_END = "Alt+Shift+X";
 /** Must match `OAUTH_LOOPBACK_PORT` in `src-tauri/src/oauth.rs`. */
 export const OAUTH_REDIRECT_URI = "http://127.0.0.1:42813/callback";
 
-export const OSU_OAUTH_NEW_APP_URL = "https://osu.ppy.sh/home/account/oauth/new";
+/**
+ * OAuth apps are created from account settings (osu-web); the old `/home/account/oauth/new` path 404s.
+ * `#new-oauth-application` matches the register button id in osu-web (`own-clients.tsx`).
+ */
+export const OSU_OAUTH_NEW_APP_URL =
+  "https://osu.ppy.sh/home/account/edit#new-oauth-application";
 
-export const OSU_OAUTH_LIST_URL = "https://osu.ppy.sh/home/account/oauth";
+/** Same page — scrolls to the OAuth section listing your apps. */
+export const OSU_OAUTH_LIST_URL = "https://osu.ppy.sh/home/account/edit#oauth";

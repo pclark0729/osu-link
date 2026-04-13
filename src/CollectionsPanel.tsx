@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type RefObject,
+} from "react";
+import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
 import { getActiveCollection, type CollectionItem, type CollectionStore } from "./models";
 
 type ToastTone = "info" | "success" | "error";
@@ -98,9 +107,28 @@ export function CollectionsPanel({
   );
 
   const [nameDraft, setNameDraft] = useState(activeCollection?.name ?? "");
+  const [renameEditing, setRenameEditing] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     setNameDraft(activeCollection?.name ?? "");
   }, [activeCollection?.id, activeCollection?.name]);
+
+  useEffect(() => {
+    setRenameEditing(false);
+  }, [activeCollection?.id]);
+
+  useEffect(() => {
+    if (!renameEditing) return;
+    const t = window.requestAnimationFrame(() => {
+      const el = renameInputRef.current;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    });
+    return () => window.cancelAnimationFrame(t);
+  }, [renameEditing]);
 
   const [listQuery, setListQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -238,43 +266,78 @@ export function CollectionsPanel({
     deleteActiveCollection();
   };
 
-  const filterChip = (id: StatusFilter, label: string) => (
-    <button
-      key={id}
-      type="button"
-      className={`collection-filter-chip ${statusFilter === id ? "active" : ""}`}
-      aria-pressed={statusFilter === id}
-      onClick={() => setStatusFilter(id)}
-    >
-      {label}
-    </button>
+  const collectionOptions = useMemo((): NeuSelectOption[] => {
+    return collectionStore.collections.map((c) => ({
+      value: c.id,
+      label: `${c.name} (${c.items.length})`,
+    }));
+  }, [collectionStore.collections]);
+
+  const statusFilterOptions = useMemo((): NeuSelectOption[] => {
+    const c = statusCounts;
+    const n = activeItems.length;
+    return [
+      { value: "all", label: `All (${n})` },
+      { value: "pending", label: `Pending (${c.pending})` },
+      { value: "downloading", label: `Downloading (${c.downloading})` },
+      { value: "error", label: `Error (${c.error})` },
+      { value: "imported", label: `Imported (${c.imported})` },
+    ];
+  }, [activeItems.length, statusCounts]);
+
+  const libraryFilterOptions = useMemo((): NeuSelectOption[] => {
+    const notInLib = activeItems.length - inLibraryCount;
+    return [
+      { value: "all", label: "Library: all maps" },
+      { value: "inLibrary", label: `In Songs folder (${inLibraryCount})` },
+      { value: "notInLibrary", label: `Not in Songs (${notInLib})` },
+    ];
+  }, [activeItems.length, inLibraryCount]);
+
+  const sortOptions = useMemo(
+    (): NeuSelectOption[] => [
+      { value: "title", label: "Sort: title" },
+      { value: "artist", label: "Sort: artist" },
+      { value: "status", label: "Sort: status" },
+    ],
+    [],
   );
 
+  const filtersActive =
+    listQuery.trim() !== "" || statusFilter !== "all" || libraryFilter !== "all";
+
+  const clearListFilters = () => {
+    setListQuery("");
+    setStatusFilter("all");
+    setLibraryFilter("all");
+  };
+
+  const commitRenameAndClose = useCallback(() => {
+    commitCollectionRename(nameDraft);
+    setRenameEditing(false);
+  }, [commitCollectionRename, nameDraft]);
+
+  const cancelRename = useCallback(() => {
+    setNameDraft(activeCollection?.name ?? "");
+    setRenameEditing(false);
+  }, [activeCollection?.name]);
+
   return (
-    <div className="panel panel-elevated collections-panel">
-      <div className="panel-head">
-        <h2>Collections</h2>
-        <p className="panel-sub panel-sub--tight">
-          <strong>{activeItems.length}</strong> in &quot;{activeCollection?.name ?? "—"}&quot; ·{" "}
-          <strong>{totalMapsAcrossCollections}</strong> total in all lists
-        </p>
-        <p className="collection-head-meta" aria-label="Queue status for this collection">
-          <span className="collection-head-meta-item">
-            Pending <strong>{statusCounts.pending}</strong>
-          </span>
-          <span className="collection-head-meta-item">
-            Downloading <strong>{statusCounts.downloading}</strong>
-          </span>
-          <span className="collection-head-meta-item">
-            Error <strong>{statusCounts.error}</strong>
-          </span>
-          <span className="collection-head-meta-item">
-            Imported <strong>{statusCounts.imported}</strong>
-          </span>
-          <span className="collection-head-meta-item">
-            In Songs <strong>{inLibraryCount}</strong> / <strong>{activeItems.length}</strong>
-          </span>
-        </p>
+    <div className="panel panel-elevated collections-panel" data-ui-density="compact">
+      <div className="collection-summary-strip" role="status" aria-label="Collection overview">
+        <span className="collection-summary-item">
+          <strong>{activeItems.length}</strong> in this list
+        </span>
+        <span className="collection-summary-item">
+          <strong>{totalMapsAcrossCollections}</strong> across all lists
+        </span>
+        <span className="collection-summary-item">
+          Pending <strong>{statusCounts.pending}</strong> · Downloading <strong>{statusCounts.downloading}</strong> ·
+          Error <strong>{statusCounts.error}</strong> · Imported <strong>{statusCounts.imported}</strong>
+        </span>
+        <span className="collection-summary-item collection-summary-item--accent">
+          In Songs <strong>{inLibraryCount}</strong>/<strong>{activeItems.length}</strong>
+        </span>
       </div>
       <input
         ref={importFileRef}
@@ -285,38 +348,50 @@ export function CollectionsPanel({
       />
 
       <div className="collection-toolbar">
-        <div className="collection-picker">
-          <span className="collection-picker-heading" id="collection-picker-label">
-            Switch collection
-          </span>
+        <div className="collection-toolbar-top">
           <div
-            className="collection-picker-list"
-            role="listbox"
-            aria-labelledby="collection-picker-label"
+            className="collection-switcher-wrap"
+            role="group"
+            aria-labelledby="collection-switcher-label"
           >
-            {collectionStore.collections.map((c) => {
-              const active = c.id === activeCollection?.id;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  className={`collection-picker-card ${active ? "active" : ""}`}
-                  onClick={() => setActiveCollectionId(c.id)}
-                >
-                  {active && <span className="collection-picker-current">Selected</span>}
-                  <span className="collection-picker-card-name">{c.name}</span>
-                  <span className="collection-picker-card-meta">
-                    {c.items.length} {c.items.length === 1 ? "map" : "maps"}
-                  </span>
-                </button>
-              );
-            })}
+            <span className="collection-switcher-label" id="collection-switcher-label">
+              Active list
+            </span>
+            <NeuSelect
+              id="collection-active-select"
+              value={activeCollection?.id ?? collectionStore.collections[0]?.id ?? ""}
+              options={collectionOptions}
+              onChange={(id) => setActiveCollectionId(id)}
+            />
           </div>
-        </div>
-        <div className="collection-toolbar-actions">
-          <div className="collection-toolbar-buttons">
+          <div className="collection-toolbar-buttons" aria-label="Collection actions">
+            {renameEditing ? (
+              <div className="collection-rename-inline">
+                <input
+                  ref={renameInputRef}
+                  type="text"
+                  className="collection-rename-input"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onBlur={() => commitRenameAndClose()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitRenameAndClose();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelRename();
+                    }
+                  }}
+                  placeholder="List name"
+                  aria-label="Rename current collection"
+                />
+              </div>
+            ) : (
+              <button type="button" className="secondary" onClick={() => setRenameEditing(true)}>
+                Rename
+              </button>
+            )}
             <button type="button" className="secondary" onClick={createCollection}>
               New
             </button>
@@ -332,72 +407,59 @@ export function CollectionsPanel({
               Delete
             </button>
           </div>
-          <label className="field collection-rename-field">
-            <span className="collection-rename-label">Rename</span>
-            <input
-              type="text"
-              className="collection-rename-input"
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              onBlur={() => commitCollectionRename(nameDraft)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              }}
-              placeholder="Collection name"
-              aria-label="Rename current collection"
-            />
-          </label>
         </div>
       </div>
 
       <div className="collection-filters-shell">
         <label className="field collection-search-field">
-          <span id="collection-search-label">Filter list</span>
+          <span id="collection-search-label">Search this list</span>
           <input
             type="search"
             autoComplete="off"
             placeholder="Title, artist, mapper, set ID…"
             value={listQuery}
             onChange={(e) => setListQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setListQuery("");
+              }
+            }}
             aria-labelledby="collection-search-label"
           />
         </label>
-        <div className="collection-controls-row">
-          <div className="collection-filter-group" role="group" aria-label="Filter by status">
-            {filterChip("all", "All")}
-            {filterChip("pending", "Pending")}
-            {filterChip("downloading", "Downloading")}
-            {filterChip("error", "Error")}
-            {filterChip("imported", "Imported")}
-          </div>
-          <div className="collection-select-group">
-            <label className="collection-select-label">
-              <span className="collection-select-caption">Library</span>
-              <select
-                className="collection-select"
+        <div className="collection-controls-row collection-controls-row--selects">
+          <div className="collection-filter-selects">
+            <div className="collection-filter-slot">
+              <NeuSelect
+                value={statusFilter}
+                options={statusFilterOptions}
+                onChange={(v) => setStatusFilter(v as StatusFilter)}
+                id="collection-status-filter"
+              />
+            </div>
+            <div className="collection-filter-slot">
+              <NeuSelect
                 value={libraryFilter}
-                onChange={(e) => setLibraryFilter(e.target.value as LibraryFilter)}
-                aria-label="Filter by Songs folder"
-              >
-                <option value="all">All</option>
-                <option value="inLibrary">In Songs</option>
-                <option value="notInLibrary">Not in Songs</option>
-              </select>
-            </label>
-            <label className="collection-select-label">
-              <span className="collection-select-caption">Sort</span>
-              <select
-                className="collection-select"
+                options={libraryFilterOptions}
+                onChange={(v) => setLibraryFilter(v as LibraryFilter)}
+                id="collection-library-filter"
+              />
+            </div>
+            <div className="collection-filter-slot">
+              <NeuSelect
                 value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as SortKey)}
-                aria-label="Sort list"
-              >
-                <option value="title">Title</option>
-                <option value="artist">Artist</option>
-                <option value="status">Status</option>
-              </select>
-            </label>
+                options={sortOptions}
+                onChange={(v) => setSortKey(v as SortKey)}
+                id="collection-sort"
+              />
+            </div>
           </div>
+          {filtersActive ? (
+            <button type="button" className="secondary collection-clear-filters" onClick={clearListFilters}>
+              Clear filters
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -417,7 +479,7 @@ export function CollectionsPanel({
             disabled={importBusy || errorItems.length === 0}
             onClick={() => void importItemsQueue(errorItems)}
           >
-            Retry errors ({errorItems.length})
+            Retry failed ({errorItems.length})
           </button>
           <button
             type="button"
@@ -425,7 +487,7 @@ export function CollectionsPanel({
             disabled={importBusy || queueItems.length === 0}
             onClick={() => void importItemsQueue(queueItems)}
           >
-            Import queue ({queueItems.length})
+            Import all queued ({queueItems.length})
           </button>
           <label className="checkbox-row collection-import-no-video">
             <input type="checkbox" checked={noVideo} onChange={(e) => setNoVideo(e.target.checked)} />
@@ -434,7 +496,7 @@ export function CollectionsPanel({
         </div>
         {importBusy && (
           <p className="hint collection-import-hint" role="status">
-            Import queue running — you can switch tabs; avoid closing the app.
+            Importing…
           </p>
         )}
       </div>
@@ -462,8 +524,7 @@ export function CollectionsPanel({
         <div className="share-panel">
           <div className="share-panel-title">Share this collection</div>
           <p className="share-panel-desc">
-            Friends need osu-link too. Send the JSON file or paste from clipboard — imports always create a{" "}
-            <strong>new</strong> collection so nothing is overwritten.
+            Import always creates a <strong>new</strong> list — nothing is overwritten.
           </p>
           <div className="share-actions">
             <button
@@ -489,8 +550,8 @@ export function CollectionsPanel({
               Paste from clipboard
             </button>
           </div>
-          <p className="hint collection-share-hint">
-            Imports use public mirrors (not the osu! API). If you see 429, wait before retrying.
+          <p className="hint collection-share-hint" title="Imports use public mirrors. On HTTP 429, wait and retry.">
+            Mirrors, not the osu! API
           </p>
         </div>
       </details>
@@ -574,7 +635,7 @@ export function CollectionsPanel({
                   {item.error ? `: ${item.error}` : ""}
                 </div>
               </div>
-              <div className="collection-row-actions">
+              <div className="collection-row-actions" data-ui-density="micro">
                 <a
                   className="collection-osu-link secondary"
                   href={`https://osu.ppy.sh/beatmapsets/${item.beatmapsetId}`}

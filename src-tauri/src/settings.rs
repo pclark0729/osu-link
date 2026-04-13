@@ -45,6 +45,9 @@ pub struct Settings {
     /// Override WebSocket URL for control (e.g. wss://example.com/control). If unset, derived from Social API base.
     #[serde(default)]
     pub discord_control_ws_url: Option<String>,
+    /// Mechanical-style click / type sounds for buttons and text fields (Web Audio).
+    #[serde(default = "default_ui_sound_effects_enabled")]
+    pub ui_sound_effects_enabled: bool,
 }
 
 fn default_hotkey_focus_search() -> String {
@@ -71,6 +74,10 @@ fn default_discord_control_enabled() -> bool {
     true
 }
 
+fn default_ui_sound_effects_enabled() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -88,6 +95,7 @@ impl Default for Settings {
             discord_control_enabled: true,
             discord_control_session_token: None,
             discord_control_ws_url: None,
+            ui_sound_effects_enabled: default_ui_sound_effects_enabled(),
         }
     }
 }

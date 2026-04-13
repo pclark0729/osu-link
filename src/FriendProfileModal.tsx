@@ -4,6 +4,7 @@ import { ACHIEVEMENTS } from "./achievements/catalog";
 import { PlayerRankCard } from "./PlayerRankCard";
 import { computeOsuPerformanceRank } from "./playerRank";
 import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
+import { FriendProfileLoadingSkeleton } from "./Skeleton";
 import { parseUserRulesetPayload, type ParsedRow } from "./SocialLeaderboard";
 
 function asRecord(v: unknown): Record<string, unknown> {
@@ -113,13 +114,25 @@ export function FriendProfileModal({
     <div className="modal-overlay friend-profile-overlay" role="dialog" aria-modal="true" onClick={onClose}>
       <div className="modal-sheet friend-profile-sheet" onClick={(e) => e.stopPropagation()}>
         <div className="friend-profile-head">
-          {row?.avatarUrl ? (
-            <img className="friend-profile-avatar" src={row.avatarUrl} alt="" width={56} height={56} />
-          ) : null}
-          <div>
-            <h2 className="friend-profile-title">{row?.username ?? username}</h2>
-            <p className="friend-profile-sub">Profile · {osuId}</p>
-          </div>
+          {busy && !row && !loadErr ? (
+            <>
+              <div className="ui-skeleton-circle ui-skeleton-circle--lg" aria-hidden />
+              <div className="friend-profile-head-skel-text">
+                <div className="ui-skeleton-line ui-skeleton-line--title" />
+                <div className="ui-skeleton-line ui-skeleton-line--short" />
+              </div>
+            </>
+          ) : (
+            <>
+              {row?.avatarUrl ? (
+                <img className="friend-profile-avatar" src={row.avatarUrl} alt="" width={56} height={56} />
+              ) : null}
+              <div>
+                <h2 className="friend-profile-title">{row?.username ?? username}</h2>
+                <p className="friend-profile-sub">Profile · {osuId}</p>
+              </div>
+            </>
+          )}
           <button type="button" className="toast-dismiss" aria-label="Close" onClick={onClose}>
             ×
           </button>
@@ -129,12 +142,13 @@ export function FriendProfileModal({
           <NeuSelect value={mode} options={MODE_OPTIONS} onChange={(v) => setMode(v)} />
         </div>
 
-        {busy && !row && !loadErr ? <p className="hint">Loading…</p> : null}
         {loadErr ? <p className="hint friend-profile-err">{loadErr}</p> : null}
 
         <div className="friend-profile-rank">
           <PlayerRankCard info={osuRank} variant="compact" />
         </div>
+
+        {busy && !row && !loadErr ? <FriendProfileLoadingSkeleton /> : null}
 
         {row && !row.error ? (
           <div className="friend-profile-stats-grid">

@@ -28,13 +28,13 @@ import {
   parseImportedCollectionJson,
   serializeSharedCollection,
 } from "./collectionShare";
+import { HeaderVisualizer } from "./HeaderVisualizer";
 import {
   DEFAULT_HOTKEY_FOCUS_SEARCH,
   DEFAULT_HOTKEY_RANDOM_CURATE,
   DEFAULT_HOTKEY_TRAIN_END,
   DEFAULT_HOTKEY_TRAIN_OPEN,
   DEFAULT_HOTKEY_TRAIN_RANDOMIZE,
-  DEFAULT_PARTY_WS_URL,
   PARTY_SERVER_URL_UI_HIDDEN,
   PUBLIC_PARTY_WS_URL,
   defaultPartyWsUrlFromSettings,
@@ -65,7 +65,7 @@ import { TitleBar } from "./TitleBar";
 import { useSearchDownloadState } from "./useSearchDownloadState";
 import { useGlobalHotkeys } from "./useGlobalHotkeys";
 import { DownloadLogsPanel } from "./DownloadLogsPanel";
-import { MainPaneSticky } from "./MainPaneSticky";
+import { SettingsPanel } from "./SettingsPanel";
 import { DOWNLOAD_LOG_MAX, newDownloadLogId, type DownloadLogEntry } from "./downloadLog";
 import packageJson from "../package.json";
 import type { Update } from "@tauri-apps/plugin-updater";
@@ -73,8 +73,12 @@ import { applyUpdateAndRelaunch, check, checkForUpdatesAndInstall, updaterAvaila
 import {
   loadDesktopNotificationsEnabled,
   notifyDesktop,
-  saveDesktopNotificationsEnabled,
 } from "./desktopNotify";
+import {
+  playUiThock,
+  uiSoundKeydownMightPlay,
+  uiSoundPointerMightPlay,
+} from "./uiSounds";
 import "./App.css";
 
 interface Settings {
@@ -92,6 +96,7 @@ interface Settings {
   discordControlEnabled: boolean;
   discordControlSessionToken: string | null;
   discordControlWsUrl: string | null;
+  uiSoundEffectsEnabled: boolean;
 }
 
 function mapSettingsFromRust(s: Settings): Settings {
@@ -110,6 +115,7 @@ function mapSettingsFromRust(s: Settings): Settings {
     discordControlEnabled: Boolean(s.discordControlEnabled),
     discordControlSessionToken: s.discordControlSessionToken ?? null,
     discordControlWsUrl: s.discordControlWsUrl ?? null,
+    uiSoundEffectsEnabled: s.uiSoundEffectsEnabled !== false,
   };
 }
 
@@ -140,6 +146,7 @@ function settingsToCmdPayload(s: Settings) {
       s.discordControlWsUrl && s.discordControlWsUrl.trim() !== ""
         ? s.discordControlWsUrl.trim()
         : null,
+    uiSoundEffectsEnabled: s.uiSoundEffectsEnabled,
   };
 }
 
@@ -196,44 +203,87 @@ type AppTab =
   | "logs"
   | "settings";
 
-const VIEW_COPY: Record<AppTab, { title: string; subtitle: string }> = {
-  search: {
-    title: "Search",
-    subtitle: "Browse the osu! catalogue, tune filters, and import full beatmap sets.",
-  },
-  collection: {
-    title: "Collections",
-    subtitle: "Queues, batch import, exports, and shared JSON lists.",
-  },
-  party: {
-    title: "Party",
-    subtitle: "Connect to the party server for synced lobbies, queue, and chat.",
-  },
-  social: {
-    title: "Social",
-    subtitle: "Friends, activity, battles, challenges, and leaderboards.",
-  },
-  train: {
-    title: "Train",
-    subtitle: "Ramping queue, accuracy goals, and osu! deep links.",
-  },
-  stats: {
-    title: "Stats",
-    subtitle: "Performance trends and charts from your recent scores.",
-  },
-  achievements: {
-    title: "Achievements",
-    subtitle: "Badges from training and social play — sync when the party server is online.",
-  },
-  logs: {
-    title: "Logs",
-    subtitle: "History of beatmap downloads and import paths.",
-  },
-  settings: {
-    title: "Settings",
-    subtitle: "Sign-in, Songs folder, party URLs, and updates.",
-  },
+const TAB_TITLE: Record<AppTab, string> = {
+  search: "Search",
+  collection: "Collections",
+  party: "Party",
+  social: "Social",
+  train: "Train",
+  stats: "Stats",
+  achievements: "Achievements",
+  logs: "Logs",
+  settings: "Settings",
 };
+
+/** Short context line under the page title — orients users per tab (UX hierarchy). */
+const TAB_SUBTITLE: Record<AppTab, string> = {
+  search: "Find beatmaps, curate results, and send to your library or party.",
+  collection: "Organize queues, import maps, and bulk-manage your lists.",
+  party: "Voiceless lobby — queue maps and chat with your group.",
+  social: "Friends, battles, leaderboards, and live plays.",
+  train: "Skill practice with an auto queue and accuracy goals.",
+  stats: "Your osu! performance, charts, and insights.",
+  achievements: "Milestones and badges tracked in osu-link.",
+  logs: "Recent download activity and outcomes.",
+  settings: "Account, paths, hotkeys, and integrations.",
+};
+
+/** Sidebar top-to-bottom — directional page motion follows this order (satisfying spatial continuity). */
+const TAB_VISUAL_ORDER: AppTab[] = [
+  "search",
+  "collection",
+  "train",
+  "party",
+  "social",
+  "stats",
+  "achievements",
+  "logs",
+  "settings",
+];
+
+const SIDE_NAV_LIQUID_RADIUS_PX = 14;
+
+function measureSideNavTab(nav: HTMLElement, t: AppTab): { top: number; height: number } | null {
+  const btn = nav.querySelector(`[data-app-tab="${t}"]`) as HTMLElement | null;
+  if (!btn) return null;
+  const nr = nav.getBoundingClientRect();
+  const br = btn.getBoundingClientRect();
+  return { top: br.top - nr.top + nav.scrollTop, height: br.height };
+}
+
+function measureLiquidRelativeToNav(liquid: HTMLElement, nav: HTMLElement): { top: number; height: number } {
+  const nr = nav.getBoundingClientRect();
+  const er = liquid.getBoundingClientRect();
+  return { top: er.top - nr.top + nav.scrollTop, height: er.height };
+}
+
+function unionNavRects(
+  a: { top: number; height: number },
+  b: { top: number; height: number },
+): { top: number; height: number } {
+  const top = Math.min(a.top, b.top);
+  const height = Math.max(a.top + a.height, b.top + b.height) - top;
+  return { top, height };
+}
+
+/** Distance-aware timing so adjacent tabs feel snappy and far jumps stay fluid. */
+function liquidFlowParams(rFrom: { top: number; height: number }, rTo: { top: number; height: number }) {
+  const c0 = rFrom.top + rFrom.height * 0.5;
+  const c1 = rTo.top + rTo.height * 0.5;
+  const verticalTravel = Math.abs(c1 - c0);
+  const sizeDelta = Math.abs(rFrom.height - rTo.height);
+  const span = verticalTravel + sizeDelta * 0.35;
+
+  const duration = Math.round(Math.min(740, Math.max(380, 340 + span * 0.92)));
+  const mergeOffset = Math.min(0.46, Math.max(0.26, 0.3 + span / 1400));
+  const settleSplit = Math.min(0.88, Math.max(0.68, 0.72 + span / 4000));
+
+  const down = rTo.top > rFrom.top;
+  const bouncePx = Math.min(5, Math.max(2, 1.4 + span * 0.018));
+  const overshootTop = down ? rTo.top + bouncePx : rTo.top - bouncePx;
+
+  return { duration, mergeOffset, settleSplit, overshootTop };
+}
 
 function partyChipMeta(state: PartyClientState): { label: string; tone: "neutral" | "ok" | "warn" } {
   switch (state.connection) {
@@ -250,60 +300,17 @@ function partyChipMeta(state: PartyClientState): { label: string; tone: "neutral
   }
 }
 
-function viewSubtitle(tab: AppTab, partyState: PartyClientState): string {
-  const base = VIEW_COPY[tab].subtitle;
-  if (tab !== "party") return base;
-  if (partyState.connection === "connecting") return "Connecting to the party server…";
-  if (partyState.connection === "error") {
-    const hint = partyState.lastError?.trim();
-    return hint ? `Connection issue: ${hint}` : "Could not reach the party server. Check the WebSocket URL in Settings.";
-  }
-  if (partyState.connection === "connected") {
-    return partyState.lobbyCode
-      ? `You are in lobby ${partyState.lobbyCode}. Queue and chat are below.`
-      : "Connected — create a lobby or join with a code.";
-  }
-  return base;
+/** Only shown under the Party tab when the connection failed. */
+function partyConnectionErrorLine(partyState: PartyClientState): string | null {
+  if (partyState.connection !== "error") return null;
+  const hint = partyState.lastError?.trim();
+  return hint ? hint : "Could not reach the party server. Check the WebSocket URL in Settings.";
 }
 
-type DesktopIntroPhase = "idle" | "tv" | "eject" | "done";
-
-const DESKTOP_INTRO_TV_MS = 820;
-const DESKTOP_INTRO_EJECT_MS = 520;
-
-function initialDesktopIntroPhase(): DesktopIntroPhase {
-  if (!isTauri()) return "done";
-  if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    return "done";
-  }
-  return "idle";
-}
-
-const TauriTitleBarChrome = memo(function TauriTitleBarChrome({
-  titleBarEjected,
-  peek,
-  onPeekEnter,
-  onPeekLeave,
-}: {
-  titleBarEjected: boolean;
-  peek: boolean;
-  onPeekEnter: () => void;
-  onPeekLeave: () => void;
-}) {
+const TauriTitleBarChrome = memo(function TauriTitleBarChrome() {
   return (
-    <div className="title-bar-chrome-root" onMouseLeave={titleBarEjected ? onPeekLeave : undefined}>
-      {titleBarEjected && (
-        <div
-          className="title-bar-hover-strip"
-          data-tauri-drag-region
-          onMouseEnter={onPeekEnter}
-          aria-hidden
-        />
-      )}
-      <div
-        className={`title-bar-slot ${titleBarEjected && !peek ? "title-bar-slot--ejected" : ""}`}
-        onMouseEnter={titleBarEjected ? onPeekEnter : undefined}
-      >
+    <div className="title-bar-chrome-root">
+      <div className="title-bar-slot">
         <div className="title-bar-slot-inner">
           <TitleBar />
         </div>
@@ -312,34 +319,27 @@ const TauriTitleBarChrome = memo(function TauriTitleBarChrome({
   );
 });
 
-const CrtStartupOverlay = memo(function CrtStartupOverlay() {
-  return <div className="crt-startup-overlay" aria-hidden />;
-});
-
-function ViewContextHeader({
-  tab,
-  authLabel,
-  partyState,
-}: {
-  tab: AppTab;
-  authLabel: string;
-  partyState: PartyClientState;
-}) {
-  const copy = VIEW_COPY[tab];
+function ViewContextHeader({ tab, partyState }: { tab: AppTab; partyState: PartyClientState }) {
   const chip = partyChipMeta(partyState);
+  const partyErr = tab === "party" ? partyConnectionErrorLine(partyState) : null;
   return (
     <header className="view-context-header" aria-labelledby="view-context-title">
+      <HeaderVisualizer />
       <div className="view-context-headline">
         <h1 id="view-context-title" className="view-context-title">
-          {copy.title}
+          {TAB_TITLE[tab]}
         </h1>
-        <p className="view-context-subtitle">{viewSubtitle(tab, partyState)}</p>
+        <p className="view-context-subtitle">{TAB_SUBTITLE[tab]}</p>
+        {partyErr ? (
+          <p className="view-context-alert" role="alert">
+            {partyErr}
+          </p>
+        ) : null}
       </div>
       <div className="view-context-chips" role="status" aria-live="polite">
-        <span className="view-chip view-chip--neutral" title={authLabel}>
-          {authLabel}
+        <span className={`view-chip view-chip--${chip.tone}`} title={chip.label}>
+          {chip.label}
         </span>
-        <span className={`view-chip view-chip--${chip.tone}`}>{chip.label}</span>
       </div>
     </header>
   );
@@ -350,9 +350,6 @@ export default function App() {
   const [startupUpdateVersion, setStartupUpdateVersion] = useState<string | null>(null);
   const [startupUpdateBusy, setStartupUpdateBusy] = useState(false);
   const [bootReady, setBootReady] = useState(false);
-  const [desktopIntroPhase, setDesktopIntroPhase] = useState<DesktopIntroPhase>(initialDesktopIntroPhase);
-  const [titleBarPeek, setTitleBarPeek] = useState(false);
-  const titleBarPeekTimerRef = useRef<number | null>(null);
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const searchQueryRef = useRef<HTMLInputElement | null>(null);
   const [searchFocusNonce, setSearchFocusNonce] = useState(0);
@@ -363,6 +360,28 @@ export default function App() {
   const trainHotkeyEndRef = useRef<() => void>(() => {});
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [tab, setTab] = useState<AppTab>("search");
+  /** Frozen per tab mount so Strict Mode / re-renders do not flip `data-nav` mid-animation. */
+  const tabNavFreezeRef = useRef<{ tab: AppTab; dir: "up" | "down" | "none" }>({
+    tab,
+    dir: "none",
+  });
+  if (tabNavFreezeRef.current.tab !== tab) {
+    const prev = tabNavFreezeRef.current.tab;
+    const fi = TAB_VISUAL_ORDER.indexOf(prev);
+    const ti = TAB_VISUAL_ORDER.indexOf(tab);
+    let dir: "up" | "down" | "none" = "none";
+    if (fi >= 0 && ti >= 0 && fi !== ti) dir = ti > fi ? "down" : "up";
+    tabNavFreezeRef.current = { tab, dir };
+  }
+  const tabNavDirection = tabNavFreezeRef.current.dir;
+  const sideNavRef = useRef<HTMLElement | null>(null);
+  const sideNavLiquidElRef = useRef<HTMLDivElement | null>(null);
+  const liquidFlowAnimRef = useRef<Animation | null>(null);
+  /** Last tab the liquid has finished moving to (or was snapped to). */
+  const lastLiquidTabRef = useRef<AppTab>("search");
+  const tabRef = useRef<AppTab>(tab);
+  tabRef.current = tab;
+  const [sideNavLiquid, setSideNavLiquid] = useState<{ top: number; height: number } | null>(null);
   const [settings, setSettings] = useState<Settings>({
     clientId: "",
     clientSecret: "",
@@ -378,7 +397,10 @@ export default function App() {
     discordControlEnabled: true,
     discordControlSessionToken: null,
     discordControlWsUrl: null,
+    uiSoundEffectsEnabled: true,
   });
+  const uiSoundEnabledRef = useRef(settings.uiSoundEffectsEnabled);
+  uiSoundEnabledRef.current = settings.uiSoundEffectsEnabled;
   const [discordPairingCode, setDiscordPairingCode] = useState<string | null>(null);
   const [discordPairingBusy, setDiscordPairingBusy] = useState(false);
   const [discordWsConnected, setDiscordWsConnected] = useState(false);
@@ -426,6 +448,145 @@ export default function App() {
   useEffect(() => {
     localLibraryRef.current = localBeatmapsetIds;
   }, [localBeatmapsetIds]);
+
+  const snapLiquidToTab = useCallback((t: AppTab) => {
+    const nav = sideNavRef.current;
+    const liquidEl = sideNavLiquidElRef.current;
+    if (!nav || !liquidEl) {
+      setSideNavLiquid(null);
+      return;
+    }
+    liquidFlowAnimRef.current?.cancel();
+    liquidFlowAnimRef.current = null;
+    for (const a of liquidEl.getAnimations()) {
+      a.cancel();
+    }
+    liquidEl.removeAttribute("data-flowing");
+    liquidEl.style.filter = "";
+    const r = measureSideNavTab(nav, t);
+    if (!r) {
+      setSideNavLiquid(null);
+      return;
+    }
+    setSideNavLiquid(r);
+    lastLiquidTabRef.current = t;
+    liquidEl.style.borderRadius = "";
+  }, []);
+
+  useLayoutEffect(() => {
+    const nav = sideNavRef.current;
+    const liquidEl = sideNavLiquidElRef.current;
+    if (!nav || !liquidEl) {
+      setSideNavLiquid(null);
+      return;
+    }
+
+    if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      snapLiquidToTab(tab);
+      return;
+    }
+
+    const hadAnim = liquidEl.getAnimations().length > 0;
+    const rTo = measureSideNavTab(nav, tab);
+    if (!rTo) {
+      setSideNavLiquid(null);
+      return;
+    }
+
+    if (!hadAnim && lastLiquidTabRef.current === tab) {
+      setSideNavLiquid(rTo);
+      return;
+    }
+
+    const rFrom = hadAnim
+      ? measureLiquidRelativeToNav(liquidEl, nav)
+      : measureSideNavTab(nav, lastLiquidTabRef.current);
+    if (!rFrom) {
+      snapLiquidToTab(tab);
+      return;
+    }
+
+    liquidFlowAnimRef.current?.cancel();
+    for (const a of liquidEl.getAnimations()) {
+      a.cancel();
+    }
+
+    const merged = unionNavRects(rFrom, rTo);
+    const { duration, mergeOffset, settleSplit, overshootTop } = liquidFlowParams(rFrom, rTo);
+    const midRadius = Math.min(34, Math.max(SIDE_NAV_LIQUID_RADIUS_PX + 2, merged.height * 0.24));
+    const midSaturate = Math.min(1.14, 1.04 + Math.min(merged.height / 420, 0.1));
+
+    setSideNavLiquid(rFrom);
+    liquidEl.setAttribute("data-flowing", "true");
+
+    const baseFilter = "saturate(1) brightness(1)";
+    const peakFilter = `saturate(${midSaturate.toFixed(3)}) brightness(1.04)`;
+
+    const keyframes: Keyframe[] = [
+      {
+        transform: `translate3d(0, ${rFrom.top}px, 0) scale3d(1, 1, 1)`,
+        height: `${rFrom.height}px`,
+        borderRadius: `${SIDE_NAV_LIQUID_RADIUS_PX}px`,
+        filter: baseFilter,
+        easing: "cubic-bezier(0.22, 0.95, 0.15, 1)",
+      },
+      {
+        transform: `translate3d(0, ${merged.top}px, 0) scale3d(1.012, 1.008, 1)`,
+        height: `${merged.height}px`,
+        borderRadius: `${midRadius}px`,
+        filter: peakFilter,
+        offset: mergeOffset,
+        easing: "cubic-bezier(0.33, 0.08, 0.12, 1)",
+      },
+      {
+        transform: `translate3d(0, ${overshootTop}px, 0) scale3d(1, 1, 1)`,
+        height: `${rTo.height}px`,
+        borderRadius: `${SIDE_NAV_LIQUID_RADIUS_PX + 1}px`,
+        filter: "saturate(1.06) brightness(1.02)",
+        offset: settleSplit,
+        easing: "cubic-bezier(0.28, 1.15, 0.45, 1)",
+      },
+      {
+        transform: `translate3d(0, ${rTo.top}px, 0) scale3d(1, 1, 1)`,
+        height: `${rTo.height}px`,
+        borderRadius: `${SIDE_NAV_LIQUID_RADIUS_PX}px`,
+        filter: baseFilter,
+      },
+    ];
+
+    const anim = liquidEl.animate(keyframes, {
+      duration,
+      easing: "linear",
+      fill: "forwards",
+    });
+    liquidFlowAnimRef.current = anim;
+    anim.onfinish = () => {
+      liquidFlowAnimRef.current = null;
+      lastLiquidTabRef.current = tab;
+      setSideNavLiquid(rTo);
+      liquidEl.removeAttribute("data-flowing");
+      liquidEl.style.borderRadius = "";
+      liquidEl.style.filter = "";
+    };
+    anim.oncancel = () => {
+      liquidFlowAnimRef.current = null;
+      liquidEl.removeAttribute("data-flowing");
+      liquidEl.style.filter = "";
+    };
+  }, [tab, bootReady, settings.onboardingCompleted, snapLiquidToTab]);
+
+  useEffect(() => {
+    const nav = sideNavRef.current;
+    if (!nav || typeof ResizeObserver === "undefined") return;
+    const onResize = () => snapLiquidToTab(tabRef.current);
+    const ro = new ResizeObserver(onResize);
+    ro.observe(nav);
+    window.addEventListener("resize", onResize);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onResize);
+    };
+  }, [snapLiquidToTab, bootReady, settings.onboardingCompleted]);
 
   const reloadLocalLibrary = useCallback(async () => {
     if (!isTauri()) return;
@@ -654,70 +815,9 @@ export default function App() {
     })();
   }, [refreshAuth, refreshPaths]);
 
-  useLayoutEffect(() => {
-    if (!isTauri() || desktopIntroPhase !== "idle" || !bootReady) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setDesktopIntroPhase("done");
-      return;
-    }
-    setDesktopIntroPhase("tv");
-  }, [bootReady, desktopIntroPhase]);
-
-  useEffect(() => {
-    if (desktopIntroPhase !== "tv") return;
-    const t = window.setTimeout(() => setDesktopIntroPhase("eject"), DESKTOP_INTRO_TV_MS);
-    return () => clearTimeout(t);
-  }, [desktopIntroPhase]);
-
-  useEffect(() => {
-    if (desktopIntroPhase !== "eject") return;
-    const t = window.setTimeout(() => setDesktopIntroPhase("done"), DESKTOP_INTRO_EJECT_MS);
-    return () => clearTimeout(t);
-  }, [desktopIntroPhase]);
-
   useEffect(() => {
     if (!isTauri()) return;
-    const ejected = desktopIntroPhase === "eject" || desktopIntroPhase === "done";
-    const hidden = ejected && !titleBarPeek;
-    document.documentElement.toggleAttribute("data-title-bar-ejected", hidden);
-    return () => document.documentElement.removeAttribute("data-title-bar-ejected");
-  }, [desktopIntroPhase, titleBarPeek]);
-
-  const scheduleTitleBarPeekEnd = useCallback(() => {
-    if (titleBarPeekTimerRef.current != null) window.clearTimeout(titleBarPeekTimerRef.current);
-    titleBarPeekTimerRef.current = window.setTimeout(() => {
-      titleBarPeekTimerRef.current = null;
-      setTitleBarPeek(false);
-    }, 240);
-  }, []);
-
-  const cancelTitleBarPeekEnd = useCallback(() => {
-    if (titleBarPeekTimerRef.current != null) {
-      window.clearTimeout(titleBarPeekTimerRef.current);
-      titleBarPeekTimerRef.current = null;
-    }
-  }, []);
-
-  const onTitleBarPeekEnter = useCallback(() => {
-    cancelTitleBarPeekEnd();
-    setTitleBarPeek(true);
-  }, [cancelTitleBarPeekEnd]);
-
-  const onTitleBarPeekLeave = useCallback(() => {
-    const ejected = isTauri() && (desktopIntroPhase === "eject" || desktopIntroPhase === "done");
-    if (!ejected) return;
-    scheduleTitleBarPeekEnd();
-  }, [desktopIntroPhase, scheduleTitleBarPeekEnd]);
-
-  useEffect(() => {
-    const ejected = isTauri() && (desktopIntroPhase === "eject" || desktopIntroPhase === "done");
-    if (!ejected) setTitleBarPeek(false);
-  }, [desktopIntroPhase]);
-
-  useEffect(() => {
-    return () => {
-      if (titleBarPeekTimerRef.current != null) window.clearTimeout(titleBarPeekTimerRef.current);
-    };
+    document.documentElement.removeAttribute("data-title-bar-ejected");
   }, []);
 
   useEffect(() => {
@@ -1039,6 +1139,27 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [bootReady, settings.onboardingCompleted]);
 
+  useEffect(() => {
+    if (!bootReady) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!uiSoundEnabledRef.current) return;
+      if (e.button !== 0) return;
+      if (!uiSoundPointerMightPlay(e.target)) return;
+      playUiThock("click");
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!uiSoundEnabledRef.current) return;
+      if (!uiSoundKeydownMightPlay(e)) return;
+      playUiThock("type");
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [bootReady]);
+
   const saveSettings = async () => {
     setSettingsMsg(null);
     try {
@@ -1315,8 +1436,6 @@ export default function App() {
   const totalMapsInLibrary = collectionStore.collections.reduce((acc, c) => acc + c.items.length, 0);
 
   const desktopShellClass = "app-desktop";
-  const showCrtOverlay = isTauri() && desktopIntroPhase === "tv";
-  const titleBarEjected = isTauri() && (desktopIntroPhase === "eject" || desktopIntroPhase === "done");
 
   if (!bootReady) {
     const boot = (
@@ -1329,14 +1448,8 @@ export default function App() {
     );
     return isTauri() ? (
       <div className={desktopShellClass}>
-        {showCrtOverlay && <CrtStartupOverlay />}
         <JapaneseTextBackdrop />
-        <TauriTitleBarChrome
-          titleBarEjected={titleBarEjected}
-          peek={titleBarPeek}
-          onPeekEnter={onTitleBarPeekEnter}
-          onPeekLeave={onTitleBarPeekLeave}
-        />
+        <TauriTitleBarChrome />
         {boot}
       </div>
     ) : (
@@ -1359,14 +1472,8 @@ export default function App() {
     );
     return isTauri() ? (
       <div className={desktopShellClass}>
-        {showCrtOverlay && <CrtStartupOverlay />}
         <JapaneseTextBackdrop />
-        <TauriTitleBarChrome
-          titleBarEjected={titleBarEjected}
-          peek={titleBarPeek}
-          onPeekEnter={onTitleBarPeekEnter}
-          onPeekLeave={onTitleBarPeekLeave}
-        />
+        <TauriTitleBarChrome />
         {onboarding}
       </div>
     ) : (
@@ -1381,137 +1488,168 @@ export default function App() {
     <div className="app-shell">
       <JapaneseTextBackdrop />
       <aside className="side-rail" aria-label="Main navigation">
-        <div className="brand-block">
+        <div className="brand-block" title="osu!link — beatmaps for osu! stable">
           <div className="brand-title">
             <span className="brand-osu">osu!</span>
             <span className="brand-link">link</span>
           </div>
-          <p className="brand-tagline">Beatmaps for stable</p>
         </div>
 
-        <nav className="side-nav" aria-label="Primary">
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "search" ? "active" : ""}`}
-            onClick={() => setTab("search")}
-            aria-current={tab === "search" ? "page" : undefined}
-            title="Catalog — search and download beatmaps · Alt+1"
-          >
-            <span className="side-nav-icon">
-              <Search size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Search</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "collection" ? "active" : ""}`}
-            onClick={() => setTab("collection")}
-            aria-current={tab === "collection" ? "page" : undefined}
-            title={`${activeItems.length} maps in "${activeCollection?.name ?? "—"}" · ${totalMapsInLibrary} total across collections · Alt+2`}
-          >
-            <span className="side-nav-icon">
-              <Library size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Collections</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "party" ? "active" : ""}`}
-            onClick={() => setTab("party")}
-            aria-current={tab === "party" ? "page" : undefined}
-            title={
-              partyState.lobbyCode
-                ? `Lobby code ${partyState.lobbyCode} · Alt+3`
-                : "Party — lobbies, queue, and chat · Alt+3"
-            }
-          >
-            <span className="side-nav-icon">
-              <Users size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Party</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "social" ? "active" : ""}`}
-            onClick={() => setTab("social")}
-            aria-current={tab === "social" ? "page" : undefined}
-            title="Friends, activity, battles, challenges, leaderboard · Alt+4"
-          >
-            <span className="side-nav-icon">
-              <UserPlus size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Social</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "train" ? "active" : ""}`}
-            onClick={() => setTab("train")}
-            aria-current={tab === "train" ? "page" : undefined}
-            title="Training queue and drills · Alt+5"
-          >
-            <span className="side-nav-icon">
-              <Dumbbell size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Train</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "stats" ? "active" : ""}`}
-            onClick={() => setTab("stats")}
-            aria-current={tab === "stats" ? "page" : undefined}
-            title="Performance stats and charts · Alt+6"
-          >
-            <span className="side-nav-icon">
-              <BarChart3 size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Stats</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "achievements" ? "active" : ""}`}
-            onClick={() => setTab("achievements")}
-            aria-current={tab === "achievements" ? "page" : undefined}
-            title="Badges and share cards · Alt+7"
-          >
-            <span className="side-nav-icon">
-              <Trophy size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Achievements</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "logs" ? "active" : ""}`}
-            onClick={() => setTab("logs")}
-            aria-current={tab === "logs" ? "page" : undefined}
-            title="Download history and import paths · Alt+8"
-          >
-            <span className="side-nav-icon">
-              <List size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Logs</span>
-          </button>
-          <button
-            type="button"
-            className={`side-nav-item ${tab === "settings" ? "active" : ""}`}
-            onClick={() => setTab("settings")}
-            aria-current={tab === "settings" ? "page" : undefined}
-            title="Account, OAuth, paths, and notifications · Alt+9"
-          >
-            <span className="side-nav-icon">
-              <Settings size={20} aria-hidden />
-            </span>
-            <span className="side-nav-text">Settings</span>
-          </button>
+        <nav ref={sideNavRef} className="side-nav" aria-label="Primary">
+          <div
+            ref={sideNavLiquidElRef}
+            className="side-nav-liquid"
+            aria-hidden
+            style={{
+              transform: `translate3d(0, ${sideNavLiquid?.top ?? 0}px, 0)`,
+              height: sideNavLiquid?.height ?? 0,
+              opacity: sideNavLiquid && sideNavLiquid.height > 0 ? 1 : 0,
+            }}
+          />
+          <div className="side-nav-group">
+            <div className="side-nav-group-label">Core</div>
+            <button
+              type="button"
+              data-app-tab="search"
+              className={`side-nav-item ${tab === "search" ? "active" : ""}`}
+              onClick={() => setTab("search")}
+              aria-current={tab === "search" ? "page" : undefined}
+              title="Search · Alt+1"
+            >
+              <span className="side-nav-icon">
+                <Search size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Search</span>
+            </button>
+            <button
+              type="button"
+              data-app-tab="collection"
+              className={`side-nav-item ${tab === "collection" ? "active" : ""}`}
+              onClick={() => setTab("collection")}
+              aria-current={tab === "collection" ? "page" : undefined}
+              title={`${activeItems.length} in “${activeCollection?.name ?? "—"}” · ${totalMapsInLibrary} total · Alt+2`}
+            >
+              <span className="side-nav-icon">
+                <Library size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Collections</span>
+            </button>
+            <button
+              type="button"
+              data-app-tab="train"
+              className={`side-nav-item ${tab === "train" ? "active" : ""}`}
+              onClick={() => setTab("train")}
+              aria-current={tab === "train" ? "page" : undefined}
+              title="Train · Alt+5"
+            >
+              <span className="side-nav-icon">
+                <Dumbbell size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Train</span>
+            </button>
+          </div>
+
+          <div className="side-nav-group">
+            <div className="side-nav-group-label">Online</div>
+            <button
+              type="button"
+              data-app-tab="party"
+              className={`side-nav-item ${tab === "party" ? "active" : ""}`}
+              onClick={() => setTab("party")}
+              aria-current={tab === "party" ? "page" : undefined}
+              title={
+                partyState.lobbyCode
+                  ? `Lobby ${partyState.lobbyCode} · Alt+3`
+                  : "Party · Alt+3"
+              }
+            >
+              <span className="side-nav-icon">
+                <Users size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Party</span>
+            </button>
+            <button
+              type="button"
+              data-app-tab="social"
+              className={`side-nav-item ${tab === "social" ? "active" : ""}`}
+              onClick={() => setTab("social")}
+              aria-current={tab === "social" ? "page" : undefined}
+              title="Social · Alt+4"
+            >
+              <span className="side-nav-icon">
+                <UserPlus size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Social</span>
+            </button>
+          </div>
+
+          <div className="side-nav-group">
+            <div className="side-nav-group-label">More</div>
+            <button
+              type="button"
+              data-app-tab="stats"
+              className={`side-nav-item ${tab === "stats" ? "active" : ""}`}
+              onClick={() => setTab("stats")}
+              aria-current={tab === "stats" ? "page" : undefined}
+              title="Stats · Alt+6"
+            >
+              <span className="side-nav-icon">
+                <BarChart3 size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Stats</span>
+            </button>
+            <button
+              type="button"
+              data-app-tab="achievements"
+              className={`side-nav-item ${tab === "achievements" ? "active" : ""}`}
+              onClick={() => setTab("achievements")}
+              aria-current={tab === "achievements" ? "page" : undefined}
+              title="Achievements · Alt+7"
+            >
+              <span className="side-nav-icon">
+                <Trophy size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Achievements</span>
+            </button>
+            <button
+              type="button"
+              data-app-tab="logs"
+              className={`side-nav-item ${tab === "logs" ? "active" : ""}`}
+              onClick={() => setTab("logs")}
+              aria-current={tab === "logs" ? "page" : undefined}
+              title="Logs · Alt+8"
+            >
+              <span className="side-nav-icon">
+                <List size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Logs</span>
+            </button>
+            <button
+              type="button"
+              data-app-tab="settings"
+              className={`side-nav-item ${tab === "settings" ? "active" : ""}`}
+              onClick={() => setTab("settings")}
+              aria-current={tab === "settings" ? "page" : undefined}
+              title="Settings · Alt+9"
+            >
+              <span className="side-nav-icon">
+                <Settings size={20} aria-hidden />
+              </span>
+              <span className="side-nav-text">Settings</span>
+            </button>
+          </div>
         </nav>
 
         <div className="side-footer">
-          <div className="auth-compact">{authLabel}</div>
-          <p className="side-nav-shortcut-hint">Alt+1–9 switch tabs</p>
+          <div className="auth-compact" title={authLabel}>
+            {authLabel}
+          </div>
           <p className="side-credit">Made by Peyton</p>
         </div>
       </aside>
 
       <div className="app-stage">
+        <div className="app-stage-sheen" key={tab} data-nav={tabNavDirection} aria-hidden />
         {toast && (
           <div className={`toast toast-${toast.tone}`} role="status">
             <span>{toast.message}</span>
@@ -1536,8 +1674,12 @@ export default function App() {
           aria-labelledby="view-context-title"
           id="main-content"
         >
-          <ViewContextHeader tab={tab} authLabel={authLabel} partyState={partyState} />
-          <div className="main-tab-pane">
+          <div
+            className={tab === "search" ? "app-main-column app-main-column--wide" : "app-main-column"}
+          >
+            <div className="main-view-swap" key={tab} data-nav={tabNavDirection}>
+            <ViewContextHeader tab={tab} partyState={partyState} />
+            <div className="main-tab-pane">
             <div style={{ display: tab === "train" ? "contents" : "none" }}>
               <TrainPanel
                 pushToast={(tone, message) => pushToast(tone, message)}
@@ -1632,371 +1774,31 @@ export default function App() {
         )}
 
         {tab === "settings" && (
-          <div className="panel panel-elevated settings-panel">
-            <MainPaneSticky>
-              <div className="panel-head">
-                <h2>Settings</h2>
-                <p className="panel-sub">
-                  Version <strong>{appVersion}</strong> · updates via GitHub Releases.
-                </p>
-              </div>
-            </MainPaneSticky>
-
-            <details className="settings-disclosure">
-              <summary>Keyboard shortcuts</summary>
-              <div className="settings-disclosure-body">
-                <p className="hint settings-shortcuts-hint">
-                  <strong>Main window:</strong> Alt+1 Search · Alt+2 Collections · Alt+3 Party · Alt+4 Social · Alt+5
-                  Train · Alt+6 Stats · Alt+7 Achievements · Alt+8 Logs · Alt+9 Settings
-                </p>
-                {isTauri() && (
-                  <>
-                    <p className="hint u-mb-3">
-                      <strong>Global (desktop app):</strong> work even when osu-link is in the background. Use{" "}
-                      <a
-                        href="https://v2.tauri.app/plugin/global-shortcut/"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Tauri shortcut syntax
-                      </a>{" "}
-                      (e.g. <code>Alt+Shift+O</code>, <code>Control+Shift+R</code>). Leave empty to disable.
-                    </p>
-                    <div className="grid-2">
-                      <label className="field">
-                        <span>Focus window &amp; search</span>
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          placeholder={DEFAULT_HOTKEY_FOCUS_SEARCH}
-                          value={settings.hotkeyFocusSearch}
-                          onChange={(e) => setSettings({ ...settings, hotkeyFocusSearch: e.target.value })}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Random curate download</span>
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          placeholder={DEFAULT_HOTKEY_RANDOM_CURATE}
-                          value={settings.hotkeyRandomCurate}
-                          onChange={(e) => setSettings({ ...settings, hotkeyRandomCurate: e.target.value })}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Train: open current map in osu!</span>
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          placeholder={DEFAULT_HOTKEY_TRAIN_OPEN}
-                          value={settings.hotkeyTrainOpen}
-                          onChange={(e) => setSettings({ ...settings, hotkeyTrainOpen: e.target.value })}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Train: randomize map (auto queue)</span>
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          placeholder={DEFAULT_HOTKEY_TRAIN_RANDOMIZE}
-                          value={settings.hotkeyTrainRandomize}
-                          onChange={(e) => setSettings({ ...settings, hotkeyTrainRandomize: e.target.value })}
-                        />
-                      </label>
-                      <label className="field">
-                        <span>Train: end session</span>
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          placeholder={DEFAULT_HOTKEY_TRAIN_END}
-                          value={settings.hotkeyTrainEnd}
-                          onChange={(e) => setSettings({ ...settings, hotkeyTrainEnd: e.target.value })}
-                        />
-                      </label>
-                    </div>
-                    <div className="row-actions row-actions--spaced u-mt-3">
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() =>
-                          setSettings((s) => ({
-                            ...s,
-                            hotkeyFocusSearch: "",
-                            hotkeyRandomCurate: "",
-                            hotkeyTrainOpen: "",
-                            hotkeyTrainRandomize: "",
-                            hotkeyTrainEnd: "",
-                          }))
-                        }
-                      >
-                        Clear global hotkeys
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </details>
-
-            <details className="settings-disclosure" open>
-              <summary>Application &amp; updates</summary>
-              <div className="settings-disclosure-body">
-                <div className="row-actions row-actions--spaced">
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={!updaterAvailable() || updateBusy}
-                    aria-busy={updateBusy}
-                    onClick={() => void handleCheckForUpdates()}
-                  >
-                    {updateBusy ? "Checking…" : "Check for updates"}
-                  </button>
-                </div>
-                {!updaterAvailable() && (
-                  <p className="hint u-mb-0">
-                    Updates only in the installed desktop app (not dev or browser).
-                  </p>
-                )}
-              </div>
-            </details>
-
-            {isTauri() && (
-              <details className="settings-disclosure" open>
-                <summary>Notifications</summary>
-                <div className="settings-disclosure-body">
-                  <label className="field field--checkbox u-mb-3">
-                    <input
-                      type="checkbox"
-                      checked={desktopNotificationsEnabled}
-                      onChange={(e) => {
-                        const v = e.target.checked;
-                        saveDesktopNotificationsEnabled(v);
-                        setDesktopNotificationsEnabled(v);
-                      }}
-                    />
-                    <span>Notify: party queue &amp; friend requests</span>
-                  </label>
-                  <p className="hint u-mb-0">
-                    The OS may ask for notification permission once.
-                  </p>
-                </div>
-              </details>
-            )}
-
-            <details className="settings-disclosure" open>
-              <summary>OAuth application</summary>
-              <div className="settings-disclosure-body">
-                <p className="panel-sub panel-sub--flush-top">
-                  osu! OAuth keys for search; downloads use a public mirror.
-                </p>
-                <div className="row-actions row-actions--spaced">
-                  <button type="button" className="secondary" onClick={() => void openSetupGuide()}>
-                    Redo OAuth setup
-                  </button>
-                </div>
-                <p className="hint">
-                  On osu! (account → OAuth), redirect URI must be{" "}
-                  <code>http://127.0.0.1:42813/callback</code>. Close other osu-link windows before sign-in.
-                </p>
-                <div className="grid-2">
-                  <label className="field">
-                    <span>Client ID</span>
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      value={settings.clientId}
-                      onChange={(e) => setSettings({ ...settings, clientId: e.target.value })}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Client secret</span>
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      value={settings.clientSecret}
-                      onChange={(e) => setSettings({ ...settings, clientSecret: e.target.value })}
-                    />
-                  </label>
-                </div>
-              </div>
-            </details>
-
-            <details className="settings-disclosure" open>
-              <summary>Paths &amp; server URLs</summary>
-              <div className="settings-disclosure-body">
-                <label className="field">
-                  <span>Songs folder override (optional)</span>
-                  <input
-                    type="text"
-                    placeholder="Default from osu!.cfg if empty"
-                    value={settings.beatmapDirectory ?? ""}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        beatmapDirectory: e.target.value === "" ? null : e.target.value,
-                      })
-                    }
-                  />
-                </label>
-                {!PARTY_SERVER_URL_UI_HIDDEN && (
-                  <label className="field field--stack">
-                    <span>Party server WebSocket URL (optional)</span>
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      placeholder={PUBLIC_PARTY_WS_URL ?? DEFAULT_PARTY_WS_URL}
-                      value={settings.partyServerUrl ?? ""}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          partyServerUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
-                        })
-                      }
-                    />
-                  </label>
-                )}
-                <label className="field field--stack">
-                  <span>Social API base URL (optional)</span>
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    placeholder="http://192.168.x.x:4681 (Pi / party-server on your LAN)"
-                    value={settings.socialApiBaseUrl ?? ""}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        socialApiBaseUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
-                      })
-                    }
-                  />
-                </label>
-                <p className="hint">
-                  Social / Discord pairing use{" "}
-                  <code>{resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl) ?? "—"}</code>. Party
-                  HTTP is usually on port <code>4681</code> (party-server / Caddy on your Pi). Set this to your Pi&apos;s
-                  LAN URL if you want a fixed host, or try <code>http://raspberrypi.local:4681</code> if mDNS works. Use{" "}
-                  <code>http://127.0.0.1:4681</code> only when party-server runs on this PC. If you leave this empty,
-                  pairing still tries LAN discovery, then the same silent fallback as party connect (
-                  <code>http://192.168.1.43:4681</code>), then the public relay
-                  {PARTY_SERVER_URL_UI_HIDDEN ? " (Party WebSocket may be hidden in this build)." : "."}
-                </p>
-                <label className="field field--stack">
-                  <span>Discord control WebSocket URL (optional)</span>
-                  <input
-                    type="text"
-                    autoComplete="off"
-                    placeholder="Derived from Social API base if empty (…/control)"
-                    value={settings.discordControlWsUrl ?? ""}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        discordControlWsUrl: e.target.value.trim() === "" ? null : e.target.value.trim(),
-                      })
-                    }
-                  />
-                </label>
-                <p className="hint">
-                  Pairing uses the Party and Social API fields above immediately (no Save required first). Prefer{" "}
-                  <code>http://</code> to your Pi unless you have terminated TLS on that port. If the first relay cannot
-                  be reached, other relays (LAN discovery, <code>192.168.1.43:4681</code>, then the public host) are tried
-                  automatically without extra prompts.
-                </p>
-                {discordPairingCode && (
-                  <div className="discord-pairing-code-block">
-                    <div className="party-code-row discord-pairing-code-row">
-                      <span className="party-code-label">Discord pairing code</span>
-                      <code className="party-code-value discord-pairing-code-value" aria-label="Discord pairing code">
-                        {discordPairingCode}
-                      </code>
-                      <button type="button" className="secondary" onClick={() => void copyDiscordPairingCode()}>
-                        Copy
-                      </button>
-                    </div>
-                    <p className="hint discord-pairing-code-hint u-mb-0">
-                      In Discord run <code>/osulink link</code> and paste this code. It expires in about 15 minutes.
-                    </p>
-                  </div>
-                )}
-                {settings.discordControlSessionToken && (
-                  <p className="hint">
-                    Relay:{" "}
-                    {discordRemote?.linked
-                      ? `linked (Discord user ${discordRemote.discordUserId ?? "?"})`
-                      : "waiting for link in Discord"}{" "}
-                    · App session: {discordWsConnected ? "connected" : "disconnected"}
-                    {discordRemote?.online != null && (
-                      <> · Desktop seen by relay: {discordRemote.online ? "online" : "offline"}</>
-                    )}
-                  </p>
-                )}
-                {!isTauri() && (
-                  <p className="hint" role="status">
-                    Discord pairing and remote control run in the desktop app only (not in the browser).
-                  </p>
-                )}
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={!isTauri() || discordPairingBusy}
-                    aria-busy={discordPairingBusy}
-                    onClick={() => void startDiscordPairing()}
-                  >
-                    {discordPairingBusy ? "Requesting code…" : "Start Discord pairing"}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={!isTauri() || discordPairingBusy}
-                    onClick={() => void revokeDiscordControl()}
-                  >
-                    Revoke Discord link
-                  </button>
-                </div>
-                {discordPairingBusy && (
-                  <p className="hint u-mb-0" aria-live="polite">
-                    Contacting relay for a pairing code…
-                  </p>
-                )}
-                <p className="hint">
-                  Songs folder: {resolvedSongs || "—"} · <strong>{localBeatmapsetIds.size}</strong> set
-                  {localBeatmapsetIds.size === 1 ? "" : "s"} found (subfolders scanned).
-                </p>
-                <div className="row-actions">
-                  <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void refreshPaths()}>
-                    Rescan Songs folder
-                  </button>
-                </div>
-                <p className="hint u-mb-0">
-                  Re-sign in after changing OAuth scopes. Social needs party HTTP (<code>4681</code> by default)
-                  reachable.
-                </p>
-              </div>
-            </details>
-
-            <details className="settings-disclosure" open>
-              <summary>Account</summary>
-              <div className="settings-disclosure-body">
-                <div className="settings-danger-zone">
-                  <p className="settings-danger-zone-title">Session &amp; saved keys</p>
-                  <div className="row-actions">
-                    <button type="button" className="primary" onClick={() => void saveSettings()}>
-                      Save settings
-                    </button>
-                    <button type="button" className="secondary" onClick={() => void login()}>
-                      Sign in with osu!
-                    </button>
-                    <button type="button" className="danger" onClick={() => void logout()}>
-                      Sign out
-                    </button>
-                  </div>
-                  <p className="hint settings-danger-zone-hint">
-                    Sign out clears the local session. Save settings writes OAuth fields and paths to disk.
-                  </p>
-                </div>
-                {settingsMsg && <p className="hint">{settingsMsg}</p>}
-              </div>
-            </details>
-          </div>
+          <SettingsPanel
+            appVersion={appVersion}
+            settings={settings}
+            setSettings={setSettings}
+            desktopNotificationsEnabled={desktopNotificationsEnabled}
+            setDesktopNotificationsEnabled={setDesktopNotificationsEnabled}
+            updateBusy={updateBusy}
+            handleCheckForUpdates={handleCheckForUpdates}
+            updaterAvailable={updaterAvailable}
+            openSetupGuide={openSetupGuide}
+            saveSettings={saveSettings}
+            login={login}
+            logout={logout}
+            settingsMsg={settingsMsg}
+            resolvedSongs={resolvedSongs}
+            localBeatmapsetCount={localBeatmapsetIds.size}
+            refreshPaths={refreshPaths}
+            discordPairingCode={discordPairingCode}
+            copyDiscordPairingCode={copyDiscordPairingCode}
+            discordPairingBusy={discordPairingBusy}
+            startDiscordPairing={startDiscordPairing}
+            revokeDiscordControl={revokeDiscordControl}
+            discordRemote={discordRemote}
+            discordWsConnected={discordWsConnected}
+          />
         )}
 
         {tab === "search" && (
@@ -2040,6 +1842,8 @@ export default function App() {
             onInspectBeatmapset={(id) => setBeatmapsetDetail({ beatmapsetId: id })}
           />
         )}
+            </div>
+            </div>
           </div>
         </main>
       </div>
@@ -2048,16 +1852,10 @@ export default function App() {
 
   return isTauri() ? (
     <div className={desktopShellClass}>
-      {showCrtOverlay && <CrtStartupOverlay />}
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      <TauriTitleBarChrome
-        titleBarEjected={titleBarEjected}
-        peek={titleBarPeek}
-        onPeekEnter={onTitleBarPeekEnter}
-        onPeekLeave={onTitleBarPeekLeave}
-      />
+      <TauriTitleBarChrome />
       {main}
       {showScrollTop && (
         <button
@@ -2081,7 +1879,7 @@ export default function App() {
               Update available
             </h2>
             <p className="update-prompt-text">
-              osu-link {startupUpdateVersion} is ready to install. The app will restart to finish updating.
+              {startupUpdateVersion} ready — restarts to install.
             </p>
             <div className="update-prompt-actions">
               <button

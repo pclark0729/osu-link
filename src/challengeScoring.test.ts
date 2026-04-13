@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  ASSIGNED_STAR_MAX_DELTA,
   baselinePpPerStarFromBestScores,
   challengeRankValue,
   expectedPpAtStars,
   FALLBACK_PP_PER_STAR,
+  medianStarsFromBestScores,
+  isGlobalChallengeRules,
+  parseChallengeDifficultyMode,
   pickBestChallengePlay,
 } from "./challengeScoring";
 
@@ -88,5 +92,97 @@ describe("pickBestChallengePlay", () => {
       },
     ];
     expect(pickBestChallengePlay(raw, setId, { baselinePpPerStar: 40 })).toBeNull();
+  });
+
+  it("with preferredStars, prefers the difficulty closest to the player tier before comparing rank value", () => {
+    const raw = [
+      score(setId, 1, 180, 6, 5_000_000),
+      score(setId, 2, 120, 5, 4_000_000),
+    ];
+    const baseline = 30;
+    const picked = pickBestChallengePlay(raw, setId, {
+      baselinePpPerStar: baseline,
+      preferredStars: 5,
+    });
+    expect(picked).not.toBeNull();
+    expect(picked!.playBeatmapId).toBe(2);
+    const rv6 = challengeRankValue(180, 6, baseline);
+    const rv5 = challengeRankValue(120, 5, baseline);
+    expect(rv6).toBeGreaterThan(rv5);
+  });
+
+  it("with preferredStars, breaks ties at same star distance by rank value", () => {
+    const raw = [
+      score(setId, 1, 100, 4.5, 3_000_000),
+      score(setId, 2, 150, 5.5, 3_100_000),
+    ];
+    const baseline = 25;
+    const picked = pickBestChallengePlay(raw, setId, {
+      baselinePpPerStar: baseline,
+      preferredStars: 5,
+    });
+    expect(picked!.playBeatmapId).toBe(2);
+  });
+
+  it("with preferredStars, rejects plays farther than ASSIGNED_STAR_MAX_DELTA from assigned tier", () => {
+    const raw = [score(setId, 1, 300, 7.2, 5_000_000)];
+    const picked = pickBestChallengePlay(raw, setId, {
+      baselinePpPerStar: 30,
+      preferredStars: 5,
+    });
+    expect(picked).toBeNull();
+    expect(7.2 - 5).toBeGreaterThan(ASSIGNED_STAR_MAX_DELTA);
+  });
+
+  it("with preferredStars, accepts plays within ASSIGNED_STAR_MAX_DELTA", () => {
+    const raw = [score(setId, 9, 180, 5.9, 4_000_000)];
+    const picked = pickBestChallengePlay(raw, setId, {
+      baselinePpPerStar: 30,
+      preferredStars: 5,
+    });
+    expect(picked).not.toBeNull();
+    expect(picked!.playBeatmapId).toBe(9);
+  });
+});
+
+describe("parseChallengeDifficultyMode", () => {
+  it("returns fixed when beatmap_id is set", () => {
+    expect(parseChallengeDifficultyMode({ difficultyMode: "any" }, 123)).toBe("fixed");
+  });
+
+  it("reads any/auto from rules object", () => {
+    expect(parseChallengeDifficultyMode({ difficultyMode: "any" }, null)).toBe("any");
+    expect(parseChallengeDifficultyMode({ difficultyMode: "auto" }, null)).toBe("auto");
+  });
+
+  it("parses JSON string rules", () => {
+    expect(parseChallengeDifficultyMode('{"difficultyMode":"any"}', null)).toBe("any");
+  });
+
+  it("defaults to auto when mode missing (legacy)", () => {
+    expect(parseChallengeDifficultyMode({ display: { title: "x" } }, null)).toBe("auto");
+  });
+});
+
+describe("isGlobalChallengeRules", () => {
+  it("is true when rules_json.global is set", () => {
+    expect(isGlobalChallengeRules({ global: true })).toBe(true);
+    expect(isGlobalChallengeRules({ global: false })).toBe(false);
+  });
+
+  it("parses JSON string", () => {
+    expect(isGlobalChallengeRules('{"global":true}')).toBe(true);
+  });
+});
+
+describe("medianStarsFromBestScores", () => {
+  it("returns median star rating from best list", () => {
+    const raw = [
+      { pp: 100, beatmap: { difficulty_rating: 4 } },
+      { pp: 80, beatmap: { difficulty_rating: 6 } },
+      { pp: 90, beatmap: { difficulty_rating: 5 } },
+    ];
+    const m = medianStarsFromBestScores(raw);
+    expect(m).toBe(5);
   });
 });

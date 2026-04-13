@@ -7,6 +7,12 @@ const EPSILON_EXPECTED_PP = 30;
 /** When best-score sample has no usable PP/★ ratios. */
 export const FALLBACK_PP_PER_STAR = 45;
 
+/**
+ * Relative PP without a fixed beatmap: a recent play counts only if map ★ is within this distance of your
+ * assigned tier ({@link medianStarsFromBestScores}). Stricter than “closest wins” alone — far-off difficulties are rejected.
+ */
+export const ASSIGNED_STAR_MAX_DELTA = 1;
+
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
@@ -77,6 +83,57 @@ export function baselinePpPerStarFromBestScores(rawBest: unknown): number | null
   return prof?.ppPerStarMean ?? null;
 }
 
+/** Typical star rating from the player's best scores (median, else mean). Used to pick a fair difficulty in a set. */
+export function medianStarsFromBestScores(rawBest: unknown): number | null {
+  const insight = bestScoresToInsightScores(rawBest);
+  const prof = computeStarProfile(insight);
+  const m = prof?.median ?? prof?.mean;
+  return m != null && Number.isFinite(m) && m > 0 ? m : null;
+}
+
+/** How difficulty is resolved for a challenge (rules_json + optional fixed beatmap). */
+export type ChallengeDifficultyMode = "fixed" | "auto" | "any";
+
+/**
+ * Parse difficulty mode from API row. Legacy challenges without `difficultyMode` default to `auto`
+ * (median ★ tiering) to match behavior before explicit Any vs Auto existed.
+ */
+export function parseChallengeDifficultyMode(
+  rulesJson: unknown,
+  beatmapId: number | null | undefined,
+): ChallengeDifficultyMode {
+  if (beatmapId != null && Number.isFinite(Number(beatmapId))) return "fixed";
+  let obj: unknown = rulesJson;
+  if (typeof rulesJson === "string") {
+    try {
+      obj = JSON.parse(rulesJson);
+    } catch {
+      return "auto";
+    }
+  }
+  if (!obj || typeof obj !== "object") return "auto";
+  const m = String((obj as Record<string, unknown>).difficultyMode ?? "")
+    .trim()
+    .toLowerCase();
+  if (m === "any") return "any";
+  if (m === "auto") return "auto";
+  return "auto";
+}
+
+/** `rules_json.global` — server treats these as open to all signed-in users (no Join). */
+export function isGlobalChallengeRules(rulesJson: unknown): boolean {
+  let obj: unknown = rulesJson;
+  if (typeof rulesJson === "string") {
+    try {
+      obj = JSON.parse(rulesJson);
+    } catch {
+      return false;
+    }
+  }
+  if (!obj || typeof obj !== "object") return false;
+  return Boolean((obj as Record<string, unknown>).global);
+}
+
 export function expectedPpAtStars(baselinePpPerStar: number | null, stars: number): number {
   const b =
     baselinePpPerStar != null && Number.isFinite(baselinePpPerStar) && baselinePpPerStar > 0
@@ -108,19 +165,34 @@ function scoreTotalFromOsu(s: Record<string, unknown>): number | null {
 /**
  * Choose the recent play on the set (optional fixed beatmap) with highest relative PP.
  * Requires PP on the score (ranked plays). Returns null if none qualify.
+ *
+ * When there is no fixed beatmap but `preferredStars` is set, plays must satisfy
+ * |★ − preferredStars| ≤ {@link ASSIGNED_STAR_MAX_DELTA}, then among those the closest ★ tier wins ties, then rank value.
  */
 export function pickBestChallengePlay(
   rawRecent: unknown,
   beatmapsetId: number,
-  options: { fixedBeatmapId?: number | null; baselinePpPerStar: number | null },
+  options: {
+    fixedBeatmapId?: number | null;
+    baselinePpPerStar: number | null;
+    /**
+     * When there is no fixed beatmap, only plays within {@link ASSIGNED_STAR_MAX_DELTA} ★ of this value qualify
+     * (e.g. median ★ from the player's best scores), then best relative rank among the closest tier.
+     */
+    preferredStars?: number | null;
+  },
 ): PickedChallengePlay | null {
   const list = extractScoreArray(rawRecent);
   const baseline = options.baselinePpPerStar;
   const fixed = options.fixedBeatmapId;
-  let best: PickedChallengePlay | null = null;
+  const preferredStars = options.preferredStars;
 
   const baselineUsed =
     baseline != null && Number.isFinite(baseline) && baseline > 0 ? baseline : FALLBACK_PP_PER_STAR;
+
+  type Cand = PickedChallengePlay & { starDist: number };
+
+  const cands: Cand[] = [];
 
   for (const item of list) {
     const s = asRecord(item);
@@ -133,22 +205,59 @@ export function pickBestChallengePlay(
     if (pp == null || pp <= 0 || stars == null || stars <= 0 || bmid == null || tot == null) continue;
 
     const rv = challengeRankValue(pp, stars, baseline);
-    if (
-      best == null ||
-      rv > best.rankValue ||
-      (rv === best.rankValue && pp > best.pp) ||
-      (rv === best.rankValue && pp === best.pp && tot > best.score)
-    ) {
-      best = {
-        score: Math.round(tot),
-        pp,
-        stars,
-        playBeatmapId: bmid,
-        rankValue: rv,
-        baselinePpPerStar: baselineUsed,
-      };
-    }
+    const starDist =
+      fixed == null && preferredStars != null && Number.isFinite(preferredStars)
+        ? Math.abs(stars - preferredStars)
+        : 0;
+
+    cands.push({
+      score: Math.round(tot),
+      pp,
+      stars,
+      playBeatmapId: bmid,
+      rankValue: rv,
+      baselinePpPerStar: baselineUsed,
+      starDist,
+    });
   }
 
+  if (cands.length === 0) return null;
+
+  const useStarTier = fixed == null && preferredStars != null && Number.isFinite(preferredStars);
+
+  if (!useStarTier) {
+    let best: PickedChallengePlay | null = null;
+    for (const c of cands) {
+      const cur = c;
+      if (
+        best == null ||
+        cur.rankValue > best.rankValue ||
+        (cur.rankValue === best.rankValue && cur.pp > best.pp) ||
+        (cur.rankValue === best.rankValue && cur.pp === best.pp && cur.score > best.score)
+      ) {
+        const { starDist: _, ...rest } = cur;
+        best = rest;
+      }
+    }
+    return best;
+  }
+
+  const inAssignedBand = cands.filter((c) => c.starDist <= ASSIGNED_STAR_MAX_DELTA);
+  if (inAssignedBand.length === 0) return null;
+
+  const minDist = Math.min(...inAssignedBand.map((c) => c.starDist));
+  const tiered = inAssignedBand.filter((c) => c.starDist <= minDist + 1e-9);
+  let best: PickedChallengePlay | null = null;
+  for (const c of tiered) {
+    if (
+      best == null ||
+      c.rankValue > best.rankValue ||
+      (c.rankValue === best.rankValue && c.pp > best.pp) ||
+      (c.rankValue === best.rankValue && c.pp === best.pp && c.score > best.score)
+    ) {
+      const { starDist: _, ...rest } = c;
+      best = rest;
+    }
+  }
   return best;
 }
