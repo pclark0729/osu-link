@@ -1,0 +1,3 @@
+# Shell scripts must use LF so Linux shebangs work.
+# Avoids: sudo: ./install-pi.sh: command not found (CRLF in shebang line).
+*.sh text eol=lf
