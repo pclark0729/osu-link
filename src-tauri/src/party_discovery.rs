@@ -10,7 +10,7 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 use serde_json::Value;
 
 use crate::settings::{
-    default_hosted_social_api_base, normalize_social_api_http_base_party_port,
+    default_hosted_social_api_base, normalize_social_api_rest_base,
     resolve_social_api_base_from_saved_settings, Settings,
 };
 
@@ -206,14 +206,14 @@ pub async fn resolve_social_api_base_effective(settings: &Settings) -> Option<St
             .ok()
             .flatten();
         if let Some(base) = discovered {
-            let n = normalize_social_api_http_base_party_port(&base);
+            let n = normalize_social_api_rest_base(&base);
             cache_set(n.clone());
             Some(n)
         } else {
             Some(default_hosted_social_api_base())
         }
     };
-    resolved.map(|b| normalize_social_api_http_base_party_port(&b))
+    resolved.map(|b| normalize_social_api_rest_base(&b))
 }
 
 pub async fn resolve_discord_control_ws_url_effective(settings: &Settings) -> Option<String> {

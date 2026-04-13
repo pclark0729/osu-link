@@ -181,21 +181,60 @@ pub(crate) fn normalize_social_api_http_base_party_port(base: &str) -> String {
     base.to_string()
 }
 
+/// Caddy (and similar) terminates TLS on 443 and proxies `/api/*` to localhost:4681 — **4681 is not reachable
+/// on the public internet**. Users often paste `https://domain:4681`, which fails; the correct URL is
+/// `https://domain` (default port). Keep `https://192.168.x.x:4681` and other private IPv4 LAN URLs.
+fn strip_mistaken_https_4681_for_caddy_public_hosts(base: &str) -> String {
+    use std::net::Ipv4Addr;
+
+    let b = base.trim().trim_end_matches('/');
+    const PFX: &str = "https://";
+    if !b.to_ascii_lowercase().starts_with(PFX) {
+        return b.to_string();
+    }
+    let without = &b[PFX.len()..];
+    let path_start = without.find('/').unwrap_or(without.len());
+    let auth = &without[..path_start];
+    let tail = &without[path_start..];
+    if !auth.ends_with(":4681") {
+        return b.to_string();
+    }
+    let host = &auth[..auth.len() - ":4681".len()];
+    if host.starts_with('[') {
+        return b.to_string();
+    }
+    if let Ok(ip) = host.parse::<Ipv4Addr>() {
+        if ip.is_private() || ip.is_loopback() || ip.is_link_local() {
+            return b.to_string();
+        }
+        // Public IPv4 — user may have forwarded 4681; keep explicit port.
+        return b.to_string();
+    }
+    format!("https://{host}{tail}")
+}
+
+/// Full normalization for outbound Social REST (`/api/v1/*`).
+pub(crate) fn normalize_social_api_rest_base(base: &str) -> String {
+    let step = normalize_social_api_http_base_party_port(base);
+    strip_mistaken_https_4681_for_caddy_public_hosts(&step)
+}
+
 /// Party / social API base derived only from explicit settings (no hosted default, no LAN discovery).
 pub fn resolve_social_api_base_from_saved_settings(settings: &Settings) -> Option<String> {
     if let Some(ref u) = settings.social_api_base_url {
         let t = u.trim();
         if !t.is_empty() {
-            return Some(normalize_social_api_http_base_party_port(t));
+            return Some(normalize_social_api_rest_base(t));
         }
     }
     let ws = settings.party_server_url.as_deref().map(str::trim).filter(|s| !s.is_empty())?;
-    party_ws_to_http_base(ws)
+    party_ws_to_http_base(ws).map(|x| normalize_social_api_rest_base(&x))
 }
 
 /// Hosted HTTPS API base when the user has not configured a party URL (used if mDNS finds nothing).
 pub(crate) fn default_hosted_social_api_base() -> String {
-    party_ws_to_http_base(DEFAULT_PARTY_WS_FALLBACK).expect("default party ws maps to https")
+    let raw = party_ws_to_http_base(DEFAULT_PARTY_WS_FALLBACK).expect("default party ws maps to https");
+    normalize_social_api_rest_base(&raw)
 }
 
 fn party_ws_to_http_base(ws: &str) -> Option<String> {
@@ -245,7 +284,7 @@ pub(crate) fn http_base_to_control_ws_url(base: &str) -> Option<String> {
 
 #[cfg(test)]
 mod control_ws_url_tests {
-    use super::{http_base_to_control_ws_url, normalize_social_api_http_base_party_port};
+    use super::{http_base_to_control_ws_url, normalize_social_api_http_base_party_port, normalize_social_api_rest_base};
 
     #[test]
     fn mistaken_ws_port_in_http_base_maps_to_api_port() {
@@ -264,6 +303,26 @@ mod control_ws_url_tests {
         assert_eq!(
             normalize_social_api_http_base_party_port("http://127.0.0.1:4681"),
             "http://127.0.0.1:4681"
+        );
+    }
+
+    #[test]
+    fn https_public_domain_4681_strips_for_caddy() {
+        assert_eq!(
+            normalize_social_api_rest_base("https://osulink.peyton-clark.com:4681"),
+            "https://osulink.peyton-clark.com"
+        );
+        assert_eq!(
+            normalize_social_api_rest_base("https://osulink.peyton-clark.com:4681/api"),
+            "https://osulink.peyton-clark.com/api"
+        );
+    }
+
+    #[test]
+    fn https_lan_4681_kept() {
+        assert_eq!(
+            normalize_social_api_rest_base("https://192.168.1.10:4681"),
+            "https://192.168.1.10:4681"
         );
     }
 

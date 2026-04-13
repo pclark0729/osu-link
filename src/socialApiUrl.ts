@@ -18,6 +18,42 @@ export function normalizeSocialApiHttpBasePartyPort(base: string): string {
   return b;
 }
 
+/** Match Rust `normalize_social_api_rest_base`: Caddy serves REST on 443; `https://domain:4681` is wrong from the internet. */
+function shouldKeepHttpsExplicit4681(host: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  const c = Number(m[3]);
+  const d = Number(m[4]);
+  if ([a, b, c, d].some((n) => n > 255)) return true;
+  if (a === 10) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  return true;
+}
+
+function stripHttpsMistaken4681ForCaddyPublicHosts(base: string): string {
+  const b = base.trim().replace(/\/$/, "");
+  if (!b.toLowerCase().startsWith("https://")) return b;
+  const without = b.slice("https://".length);
+  const slash = without.indexOf("/");
+  const auth = slash === -1 ? without : without.slice(0, slash);
+  const tail = slash === -1 ? "" : without.slice(slash);
+  if (!auth.endsWith(":4681")) return b;
+  const host = auth.slice(0, -":4681".length);
+  if (host.startsWith("[")) return b;
+  if (shouldKeepHttpsExplicit4681(host)) return b;
+  return `https://${host}${tail}`;
+}
+
+/** Full REST base normalization (matches desktop `social_api_*`). */
+export function normalizeSocialApiRestBase(base: string): string {
+  return stripHttpsMistaken4681ForCaddyPublicHosts(normalizeSocialApiHttpBasePartyPort(base));
+}
+
 export function partyWsToHttpBase(ws: string): string | null {
   const w = ws.trim();
   if (!w) return null;
@@ -54,10 +90,11 @@ export function resolveSocialApiBaseUrl(
 ): string | null {
   const override = socialApiBaseUrl?.trim();
   if (override) {
-    return normalizeSocialApiHttpBasePartyPort(override);
+    return normalizeSocialApiRestBase(override);
   }
   const ws = (partyServerUrl?.trim() || HOSTED_PARTY_WS_URL || DEFAULT_PARTY_WS_URL).trim();
-  return partyWsToHttpBase(ws);
+  const raw = partyWsToHttpBase(ws);
+  return raw ? normalizeSocialApiRestBase(raw) : null;
 }
 
 /**

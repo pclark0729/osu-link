@@ -339,8 +339,11 @@ export function SettingsPanel({
             />
           </label>
           <p className="hint">
-            Use port <code>4681</code> for HTTP (REST). Port <code>4680</code> is WebSocket only — using{" "}
-            <code>:4680</code> here causes error 426. Resolved API (from fields above): <code>{resolvedApi ?? "—"}</code>
+            Port <code>4680</code> is WebSocket only (error 426 if used here). On your **LAN**, REST is often{" "}
+            <code>http://Pi-IP:4681</code>. With **Caddy / HTTPS on your domain**, use <code>https://your.domain</code>{" "}
+            with <strong>no port</strong> — do not use <code>:4681</code> on the public hostname (that port is not
+            reachable from the internet; Caddy proxies to it on 443). Resolved API (from fields above):{" "}
+            <code>{resolvedApi ?? "—"}</code>
           </p>
           {isTauri() && runtimeSocialApiBaseUrl ? (
             <p className="hint">
