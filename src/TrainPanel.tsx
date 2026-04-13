@@ -827,7 +827,12 @@ export function TrainPanel({
                         return (
                           <li key={id}>
                             <button type="button" className="train-pick-item" onClick={() => replaceCurrentWithSet(raw)}>
-                              {String(set.artist)} — {String(set.title)}
+                              <span className="train-pick-item-line">
+                                {String(set.artist)} — {String(set.title)}
+                              </span>
+                              {String(set.creator ?? "").trim() ? (
+                                <span className="train-pick-item-mapper">mapped by {String(set.creator)}</span>
+                              ) : null}
                             </button>
                             {onInspectBeatmapset && (
                               <button type="button" className="secondary train-pick-inspect" onClick={() => onInspectBeatmapset(id)}>

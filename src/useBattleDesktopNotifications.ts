@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { notifyDesktop } from "./desktopNotify";
+import { loadDiscordBattleNotificationsEnabled, notifyDiscordBattle } from "./discordBattleNotify";
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -38,6 +39,7 @@ export function useBattleDesktopNotifications(
   resolvedSocialApiBaseUrl: string | null,
   socialLoadDone: boolean,
   displayNameForOsu: (osuId: number) => string,
+  discordControlSessionToken: string | null,
 ): void {
   const prevRef = useRef<Map<number, BattleSnap>>(new Map());
   const bootstrappedRef = useRef(false);
@@ -46,6 +48,17 @@ export function useBattleDesktopNotifications(
     if (!resolvedSocialApiBaseUrl || selfOsuId == null || !socialLoadDone) return;
 
     let cancelled = false;
+
+    const battleToast = (title: string, body: string) => {
+      void notifyDesktop(title, body);
+      if (
+        loadDiscordBattleNotificationsEnabled() &&
+        discordControlSessionToken?.trim() &&
+        resolvedSocialApiBaseUrl
+      ) {
+        notifyDiscordBattle(resolvedSocialApiBaseUrl, discordControlSessionToken, title, body);
+      }
+    };
 
     const tick = async () => {
       try {
@@ -82,7 +95,7 @@ export function useBattleDesktopNotifications(
           if (old == null) {
             if (other != null && opponent === selfOsuId && creator !== selfOsuId) {
               const label = displayNameForOsu(creator);
-              void notifyDesktop("osu-link — Battle challenge", `${label} challenged you — ${mapTitleHint(r)}`);
+              battleToast("osu-link — Battle challenge", `${label} challenged you — ${mapTitleHint(r)}`);
             }
             continue;
           }
@@ -93,7 +106,7 @@ export function useBattleDesktopNotifications(
             if (w == null) body = `Battle #${id} ended — no winner. ${mapTitleHint(r)}`;
             else if (w === selfOsuId) body = `You won battle #${id}. ${mapTitleHint(r)}`;
             else body = `${displayNameForOsu(w)} won battle #${id}. ${mapTitleHint(r)}`;
-            void notifyDesktop("osu-link — Battle finished", body);
+            battleToast("osu-link — Battle finished", body);
           }
 
           if (other != null && old.state === snap.state && snap.state !== "closed") {
@@ -101,7 +114,7 @@ export function useBattleDesktopNotifications(
             const hasOtherScore = snap.scoreUids.split(",").includes(String(other));
             const hasMine = snap.scoreUids.split(",").includes(String(selfOsuId));
             if (!hadOtherScore && hasOtherScore && !hasMine) {
-              void notifyDesktop(
+              battleToast(
                 "osu-link — Battle",
                 `${displayNameForOsu(other)} submitted — your turn (#${id}). ${mapTitleHint(r)}`,
               );
@@ -121,7 +134,14 @@ export function useBattleDesktopNotifications(
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [socialGet, selfOsuId, resolvedSocialApiBaseUrl, socialLoadDone, displayNameForOsu]);
+  }, [
+    socialGet,
+    selfOsuId,
+    resolvedSocialApiBaseUrl,
+    socialLoadDone,
+    displayNameForOsu,
+    discordControlSessionToken,
+  ]);
 
   useEffect(() => {
     bootstrappedRef.current = false;

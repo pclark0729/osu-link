@@ -45,6 +45,8 @@ const API_RATE_MAX = Number(process.env.API_RATE_MAX) || 300;
 const DISCORD_PAIRING_RATE_MAX = Number(process.env.DISCORD_PAIRING_RATE_MAX) || 30;
 /** Internal Discord bot → relay API per IP per minute */
 const DISCORD_INTERNAL_RATE_MAX = Number(process.env.DISCORD_INTERNAL_RATE_MAX) || 120;
+/** POST /api/v1/discord-control/notify per IP per minute */
+const DISCORD_NOTIFY_RATE_MAX = Number(process.env.DISCORD_NOTIFY_RATE_MAX) || 30;
 const SHUTDOWN_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -111,6 +113,7 @@ const rateBuckets = new Map();
 const apiRateBuckets = new Map();
 const discordPairingRateBuckets = new Map();
 const discordInternalRateBuckets = new Map();
+const discordNotifyRateBuckets = new Map();
 
 if (socialDb) {
   controlRelay = createControlRelay({
@@ -135,6 +138,16 @@ if (socialDb) {
       }
       b.count += 1;
       return b.count <= DISCORD_INTERNAL_RATE_MAX;
+    },
+    checkDiscordNotifyRate(ip) {
+      const now = Date.now();
+      let b = discordNotifyRateBuckets.get(ip);
+      if (!b || now - b.t0 > RATE_WINDOW_MS) {
+        b = { t0: now, count: 0 };
+        discordNotifyRateBuckets.set(ip, b);
+      }
+      b.count += 1;
+      return b.count <= DISCORD_NOTIFY_RATE_MAX;
     },
   });
   log.info("Discord control relay enabled (/control WebSocket, /api/v1/discord-control/*)");

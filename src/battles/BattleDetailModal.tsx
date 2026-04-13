@@ -14,6 +14,7 @@ type BattleDetailModalProps = {
   displayNameForOsu: (osuId: number) => string;
   medianStarsByOsuId: Map<number, number | null>;
   fixedBeatmapDetailById: Map<number, FixedBeatmapDetail | null>;
+  viewerOsuId: number | null;
   onOpenInOsuError?: (message: string) => void;
   onClose: () => void;
 };
@@ -27,6 +28,7 @@ export function BattleDetailModal({
   displayNameForOsu,
   medianStarsByOsuId,
   fixedBeatmapDetailById,
+  viewerOsuId,
   onOpenInOsuError,
   onClose,
 }: BattleDetailModalProps) {
@@ -84,6 +86,7 @@ export function BattleDetailModal({
                       creatorId={creatorId}
                       opponentId={opponentId}
                       medianStarsByOsuId={medianStarsByOsuId}
+                      viewerOsuId={viewerOsuId}
                       displayNameForOsu={displayNameForOsu}
                       onOpenInOsuError={onOpenInOsuError}
                     />

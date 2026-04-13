@@ -10,6 +10,8 @@ import type { NeuSelectOption } from "./NeuSelect";
 import { fetchOsuPerformanceRankForUser } from "./osuPlayerRankFetch";
 import type { PlayerRankInfo } from "./playerRank";
 import { BattleCard } from "./battles/BattleCard";
+import type { BattlePlayHint } from "./battles/battlePlayHints";
+import { playHintFromBeatmapset } from "./battles/battlePlayHints";
 import type { FixedBeatmapDetail } from "./battles/BattleSubmitRequirement";
 import { BattleDetailModal } from "./battles/BattleDetailModal";
 import { loadAutoSubmitEnabled, saveAutoSubmitEnabled } from "./battles/battleConstants";
@@ -48,7 +50,9 @@ export function BattlesPanel({
 }: BattlesPanelProps) {
   const [busy, setBusy] = useState(false);
   const [battles, setBattles] = useState<unknown[]>([]);
-  const [hydratedTitles, setHydratedTitles] = useState<Record<number, { title: string; artist: string }>>({});
+  const [hydratedTitles, setHydratedTitles] = useState<
+    Record<number, { title: string; artist: string; creator?: string }>
+  >({});
   const fetchedSetRef = useRef<Set<number>>(new Set());
   const [fixedBeatmapDetailById, setFixedBeatmapDetailById] = useState<
     Map<number, FixedBeatmapDetail | null>
@@ -61,6 +65,10 @@ export function BattlesPanel({
   const [baselinePpByOsuId, setBaselinePpByOsuId] = useState<Map<number, number | null>>(new Map());
   /** Median ★ from top plays — assigned tier for relative PP when no fixed difficulty (submit must be within ±ASSIGNED_STAR_MAX_DELTA). */
   const [medianStarsByOsuId, setMedianStarsByOsuId] = useState<Map<number, number | null>>(new Map());
+  /** Relative-PP (non-fixed) battles: osu id → suggested map for that player’s tier. */
+  const [tierPlayHintsByBattleId, setTierPlayHintsByBattleId] = useState<
+    Map<number, Map<number, BattlePlayHint | null>>
+  >(() => new Map());
   const [detailBattleId, setDetailBattleId] = useState<number | null>(null);
   const [detailPayload, setDetailPayload] = useState<{
     battle: Record<string, unknown>;
@@ -210,39 +218,100 @@ export function BattlesPanel({
       .filter((n) => Number.isFinite(n) && n > 0);
     let cancelled = false;
     void (async () => {
-      const mBase = new Map<number, number | null>();
-      const mStars = new Map<number, number | null>();
-      for (const osuId of ids) {
-        if (cancelled) return;
-        try {
-          const raw = await invoke<unknown>("osu_user_best_scores", {
-            userId: osuId,
-            limit: 100,
-            mode: "osu",
-          });
-          mBase.set(osuId, baselinePpPerStarFromBestScores(raw));
-          mStars.set(osuId, medianStarsFromBestScores(raw));
-        } catch {
-          mBase.set(osuId, null);
-          mStars.set(osuId, null);
-        }
-      }
-      if (cancelled) return;
-      setBaselinePpByOsuId((prev) => {
-        const next = new Map(prev);
-        for (const [k, v] of mBase) next.set(k, v);
-        return next;
-      });
-      setMedianStarsByOsuId((prev) => {
-        const next = new Map(prev);
-        for (const [k, v] of mStars) next.set(k, v);
-        return next;
-      });
+      await Promise.all(
+        ids.map(async (osuId) => {
+          try {
+            const raw = await invoke<unknown>("osu_user_best_scores", {
+              userId: osuId,
+              limit: 100,
+              mode: "osu",
+            });
+            if (cancelled) return;
+            const base = baselinePpPerStarFromBestScores(raw);
+            const med = medianStarsFromBestScores(raw);
+            setBaselinePpByOsuId((prev) => {
+              const next = new Map(prev);
+              next.set(osuId, base);
+              return next;
+            });
+            setMedianStarsByOsuId((prev) => {
+              const next = new Map(prev);
+              next.set(osuId, med);
+              return next;
+            });
+          } catch {
+            if (cancelled) return;
+            setBaselinePpByOsuId((prev) => {
+              const next = new Map(prev);
+              next.set(osuId, null);
+              return next;
+            });
+            setMedianStarsByOsuId((prev) => {
+              const next = new Map(prev);
+              next.set(osuId, null);
+              return next;
+            });
+          }
+        }),
+      );
     })();
     return () => {
       cancelled = true;
     };
   }, [relativeBaselineKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const bySet = new Map<number, Array<{ battleId: number; osuId: number; stars: number }>>();
+    for (const raw of battles) {
+      const r = asRecord(raw);
+      if (Number(r.relative_pp) !== 1) continue;
+      const fbm = r.beatmap_id != null ? Number(r.beatmap_id) : null;
+      if (fbm != null && Number.isFinite(fbm)) continue;
+      const setId = Number(r.beatmapset_id);
+      const battleId = Number(r.id);
+      const c = Number(r.creator_osu_id);
+      const o = Number(r.opponent_osu_id);
+      if (!Number.isFinite(setId) || setId <= 0 || !Number.isFinite(battleId)) continue;
+      for (const pid of [c, o]) {
+        if (!Number.isFinite(pid)) continue;
+        const med = medianStarsByOsuId.get(pid);
+        if (med == null || !Number.isFinite(med) || med <= 0) continue;
+        if (!bySet.has(setId)) bySet.set(setId, []);
+        bySet.get(setId)!.push({ battleId, osuId: pid, stars: med });
+      }
+    }
+    if (bySet.size === 0) {
+      setTierPlayHintsByBattleId(new Map());
+      return;
+    }
+    void (async () => {
+      const out = new Map<number, Map<number, BattlePlayHint | null>>();
+      for (const [setId, jobs] of bySet) {
+        if (cancelled) return;
+        try {
+          const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId: setId });
+          if (cancelled) return;
+          const root = asRecord(raw);
+          const bms = Array.isArray(root.beatmaps) ? root.beatmaps : [];
+          for (const job of jobs) {
+            const hint = playHintFromBeatmapset(bms, job.stars);
+            if (!out.has(job.battleId)) out.set(job.battleId, new Map());
+            out.get(job.battleId)!.set(job.osuId, hint);
+          }
+        } catch {
+          for (const job of jobs) {
+            if (!out.has(job.battleId)) out.set(job.battleId, new Map());
+            out.get(job.battleId)!.set(job.osuId, null);
+          }
+        }
+      }
+      if (!cancelled) setTierPlayHintsByBattleId(out);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [battles, medianStarsByOsuId]);
 
   useEffect(() => {
     if (detailBattleId == null) {
@@ -314,7 +383,7 @@ export function BattlesPanel({
       const r = asRecord(b);
       const sid = Number(r.beatmapset_id);
       if (!Number.isFinite(sid)) continue;
-      const disp = r.display as { title?: string; artist?: string } | undefined;
+      const disp = r.display as { title?: string; artist?: string; creator?: string } | undefined;
       const hasServer =
         disp && (String(disp.title ?? "").trim() !== "" || String(disp.artist ?? "").trim() !== "");
       if (hasServer) continue;
@@ -333,8 +402,12 @@ export function BattlesPanel({
           const o = asRecord(raw);
           const title = String(o.title ?? "");
           const artist = String(o.artist ?? "");
+          const creator = String(o.creator ?? "").trim();
           if (cancelled) return;
-          setHydratedTitles((prev) => ({ ...prev, [sid]: { title, artist } }));
+          setHydratedTitles((prev) => ({
+            ...prev,
+            [sid]: { title, artist, ...(creator ? { creator } : {}) },
+          }));
         } catch {
           /* keep placeholder */
         }
@@ -412,22 +485,32 @@ export function BattlesPanel({
     };
   }, [battles, fixedBeatmapDetailById]);
 
-  const mapLineForBattle = useCallback(
+  const mapBeatmapDisplay = useCallback(
     (r: Record<string, unknown>) => {
       const sid = Number(r.beatmapset_id);
-      const disp = r.display as { title?: string; artist?: string } | undefined;
+      const disp = r.display as { title?: string; artist?: string; creator?: string } | undefined;
       if (disp && (String(disp.title ?? "").trim() || String(disp.artist ?? "").trim())) {
         const title = String(disp.title ?? "").trim() || "—";
         const artist = String(disp.artist ?? "").trim() || "—";
-        return `${artist} — ${title}`;
+        const mapper = String(disp.creator ?? "").trim() || null;
+        return { titleLine: `${artist} — ${title}`, mapper };
       }
       if (Number.isFinite(sid) && hydratedTitles[sid]) {
         const h = hydratedTitles[sid];
-        return `${h.artist} — ${h.title}`;
+        const mapper = h.creator?.trim() ? h.creator.trim() : null;
+        return { titleLine: `${h.artist} — ${h.title}`, mapper };
       }
-      return `Set #${Number.isFinite(sid) ? sid : "—"}`;
+      return { titleLine: `Set #${Number.isFinite(sid) ? sid : "—"}`, mapper: null as string | null };
     },
     [hydratedTitles],
+  );
+
+  const mapLineForBattle = useCallback(
+    (r: Record<string, unknown>) => {
+      const { titleLine, mapper } = mapBeatmapDisplay(r);
+      return mapper ? `${titleLine} · mapped by ${mapper}` : titleLine;
+    },
+    [mapBeatmapDisplay],
   );
 
   const fighterSubtitle = useCallback(
@@ -472,16 +555,18 @@ export function BattlesPanel({
       const opponent = Number(r.opponent_osu_id);
       const other = selfOsuId === creator ? opponent : creator;
       const friendVal = friendSelectOptions.some((o) => o.value === String(other) && o.value !== "");
-      const disp = r.display as { title?: string; artist?: string } | undefined;
+      const disp = r.display as { title?: string; artist?: string; creator?: string } | undefined;
       const sid = Number(r.beatmapset_id);
       const rel = Number(r.relative_pp) === 1;
       const fbm = r.beatmap_id != null ? Number(r.beatmap_id) : null;
+      const mapper = String(disp?.creator ?? "").trim();
       setRematchSeed({
         opponentFriend: friendVal ? String(other) : "",
         opponentManual: friendVal ? "" : String(other),
         beatmapsetId: sid,
         title: String(disp?.title ?? "").trim() || "—",
         artist: String(disp?.artist ?? "").trim() || "—",
+        ...(mapper ? { creator: mapper } : {}),
         relativePp: rel,
         fixedBeatmapId: rel && fbm != null && Number.isFinite(fbm) ? fbm : null,
       });
@@ -550,6 +635,40 @@ export function BattlesPanel({
     }
   };
 
+  const battleCardPlayProps = useCallback(
+    (r: Record<string, unknown>) => {
+      const id = Number(r.id);
+      const fbm = r.beatmap_id != null ? Number(r.beatmap_id) : null;
+      const rel = Number(r.relative_pp) === 1;
+      const creator = Number(r.creator_osu_id);
+      const opponent = Number(r.opponent_osu_id);
+      const fixedDetail =
+        fbm != null && Number.isFinite(fbm) ? fixedBeatmapDetailById.get(fbm) : undefined;
+      const fixedPlayHint: BattlePlayHint | null =
+        fbm != null && Number.isFinite(fbm)
+          ? {
+              beatmapId: fbm,
+              version: fixedDetail?.version?.trim() ? fixedDetail.version.trim() : "Beatmap",
+              stars: fixedDetail && fixedDetail.stars > 0 ? fixedDetail.stars : NaN,
+            }
+          : null;
+      const th = tierPlayHintsByBattleId.get(id);
+      const tierPlayHints =
+        rel && !(fbm != null && Number.isFinite(fbm))
+          ? {
+              creator: Number.isFinite(creator) ? th?.get(creator) ?? null : null,
+              opponent: Number.isFinite(opponent) ? th?.get(opponent) ?? null : null,
+            }
+          : null;
+      const viewerPlayHint =
+        selfOsuId != null && Number.isFinite(selfOsuId) ? th?.get(selfOsuId) ?? null : null;
+      const viewerMedianStars =
+        selfOsuId != null && Number.isFinite(selfOsuId) ? medianStarsByOsuId.get(selfOsuId) ?? null : null;
+      return { fixedPlayHint, tierPlayHints, viewerPlayHint, viewerMedianStars };
+    },
+    [fixedBeatmapDetailById, tierPlayHintsByBattleId, selfOsuId, medianStarsByOsuId],
+  );
+
   const { activeBattles, historyBattles, activeBattlesSorted } = useMemo(() => {
     const active: unknown[] = [];
     const hist: unknown[] = [];
@@ -617,6 +736,8 @@ export function BattlesPanel({
             {activeBattlesSorted.map((b) => {
               const r = asRecord(b);
               const id = Number(r.id);
+              const mapDisp = mapBeatmapDisplay(r);
+              const play = battleCardPlayProps(r);
               return (
                 <BattleCard
                   key={id}
@@ -624,13 +745,19 @@ export function BattlesPanel({
                   selfOsuId={selfOsuId}
                   tick={tick}
                   uiLocked={uiLocked}
-                  mapTitle={mapLineForBattle(r)}
+                  mapTitle={mapDisp.titleLine}
+                  mapMapper={mapDisp.mapper ?? undefined}
                   displayNameForOsu={displayNameForOsu}
                   fighterSubtitle={fighterSubtitle}
+                  fixedPlayHint={play.fixedPlayHint}
+                  tierPlayHints={play.tierPlayHints}
+                  viewerPlayHint={play.viewerPlayHint}
+                  viewerMedianStars={play.viewerMedianStars}
                   onOpenDetails={setDetailBattleId}
                   onRematch={applyRematch}
                   onSubmitFromOsu={submitBattleFromOsu}
                   onOpenScoreModal={openScoreModal}
+                  onOpenInOsuError={(msg) => onToast("error", msg)}
                 />
               );
             })}
@@ -653,6 +780,8 @@ export function BattlesPanel({
             {historyBattles.map((b) => {
               const r = asRecord(b);
               const id = Number(r.id);
+              const mapDisp = mapBeatmapDisplay(r);
+              const play = battleCardPlayProps(r);
               return (
                 <BattleCard
                   key={id}
@@ -660,13 +789,19 @@ export function BattlesPanel({
                   selfOsuId={selfOsuId}
                   tick={tick}
                   uiLocked={uiLocked}
-                  mapTitle={mapLineForBattle(r)}
+                  mapTitle={mapDisp.titleLine}
+                  mapMapper={mapDisp.mapper ?? undefined}
                   displayNameForOsu={displayNameForOsu}
                   fighterSubtitle={fighterSubtitle}
+                  fixedPlayHint={play.fixedPlayHint}
+                  tierPlayHints={play.tierPlayHints}
+                  viewerPlayHint={play.viewerPlayHint}
+                  viewerMedianStars={play.viewerMedianStars}
                   onOpenDetails={setDetailBattleId}
                   onRematch={applyRematch}
                   onSubmitFromOsu={submitBattleFromOsu}
                   onOpenScoreModal={openScoreModal}
+                  onOpenInOsuError={(msg) => onToast("error", msg)}
                 />
               );
             })}
@@ -688,6 +823,7 @@ export function BattlesPanel({
           displayNameForOsu={displayNameForOsu}
           medianStarsByOsuId={medianStarsByOsuId}
           fixedBeatmapDetailById={fixedBeatmapDetailById}
+          viewerOsuId={selfOsuId}
           onOpenInOsuError={(msg) => onToast("error", msg)}
           onClose={() => setDetailBattleId(null)}
         />

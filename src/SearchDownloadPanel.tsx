@@ -151,7 +151,7 @@ export function SearchDownloadPanel({
 
   return (
     <>
-      <div className="panel panel-elevated">
+      <div className="panel panel-elevated search-download-panel">
         <div className="search-pane-sticky">
           <div className="search-hero-card">
             <div className="search-hero-row">
@@ -353,24 +353,25 @@ export function SearchDownloadPanel({
                       </div>
                     </div>
                   </details>
-                  <details
-                    ref={filtersMenuRef}
-                    className="search-icon-menu"
-                    onToggle={(e) => {
-                      if (e.currentTarget.open && presetsMenuRef.current) presetsMenuRef.current.open = false;
-                    }}
-                  >
-                    <summary
-                      className="search-icon-menu-trigger"
-                      title="Filters and more"
-                      aria-label="Filters — layout, advanced filters, downloads, curate"
+                  <div className="search-filters-menu-anchor">
+                    <details
+                      ref={filtersMenuRef}
+                      className="search-icon-menu search-icon-menu--filters"
+                      onToggle={(e) => {
+                        if (e.currentTarget.open && presetsMenuRef.current) presetsMenuRef.current.open = false;
+                      }}
                     >
-                      <SlidersHorizontal className="search-icon-menu-trigger__icon" size={18} strokeWidth={2} aria-hidden />
-                      {hasActiveAdvancedFilters ? (
-                        <span className="search-icon-menu-dot" aria-hidden />
-                      ) : null}
-                    </summary>
-                    <div className="search-icon-menu-panel search-icon-menu-panel--filters search-more-options-body">
+                      <summary
+                        className="search-icon-menu-trigger"
+                        title="Filters and more"
+                        aria-label="Filters — layout, advanced filters, downloads, curate"
+                      >
+                        <SlidersHorizontal className="search-icon-menu-trigger__icon" size={18} strokeWidth={2} aria-hidden />
+                        {hasActiveAdvancedFilters ? (
+                          <span className="search-icon-menu-dot" aria-hidden />
+                        ) : null}
+                      </summary>
+                      <div className="search-icon-menu-panel search-icon-menu-panel--filters search-more-options-body">
                       <section className="search-more-section search-more-section--menu" aria-labelledby="search-layout-menu-heading">
                         <h3 id="search-layout-menu-heading" className="search-more-section-title">
                           Results layout
@@ -527,8 +528,9 @@ export function SearchDownloadPanel({
                           )}
                         </div>
                       </section>
-                    </div>
-                  </details>
+                      </div>
+                    </details>
+                  </div>
                 </div>
                 <button type="button" className="primary" disabled={searching} onClick={() => void runSearch(false)}>
                   {searching ? "Searching…" : "Search"}

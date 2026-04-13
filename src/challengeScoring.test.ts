@@ -8,6 +8,7 @@ import {
   medianStarsFromBestScores,
   isGlobalChallengeRules,
   parseChallengeDifficultyMode,
+  pickBeatmapIdForAssignedTier,
   pickBestChallengePlay,
 } from "./challengeScoring";
 
@@ -184,5 +185,35 @@ describe("medianStarsFromBestScores", () => {
     ];
     const m = medianStarsFromBestScores(raw);
     expect(m).toBe(5);
+  });
+});
+
+describe("pickBeatmapIdForAssignedTier", () => {
+  function bm(id: number, stars: number): Record<string, unknown> {
+    return { id, mode: "osu", status: "ranked", difficulty_rating: stars, version: "Insane" };
+  }
+
+  it("returns null when preferredStars is missing", () => {
+    expect(pickBeatmapIdForAssignedTier([bm(1, 4)], null)).toBeNull();
+  });
+
+  it("prefers a difficulty inside the assigned band when available", () => {
+    const list = [bm(10, 3), bm(11, 5.1), bm(12, 7)];
+    const preferred = 5;
+    expect(pickBeatmapIdForAssignedTier(list, preferred)).toBe(11);
+  });
+
+  it("when none in band, picks closest ★ overall", () => {
+    const list = [bm(1, 2), bm(2, 8)];
+    expect(pickBeatmapIdForAssignedTier(list, 5)).toBe(1);
+  });
+
+  it("ignores non-osu and non-ranked", () => {
+    const list = [
+      { id: 1, mode: "taiko", status: "ranked", difficulty_rating: 5 },
+      { id: 2, mode: "osu", status: "loved", difficulty_rating: 5 },
+      bm(3, 5),
+    ];
+    expect(pickBeatmapIdForAssignedTier(list, 5)).toBe(3);
   });
 });

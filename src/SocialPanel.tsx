@@ -179,10 +179,12 @@ export function SocialPanel({
   onToast,
   resolvedSocialApiBaseUrl,
   socialApiIsOverride,
+  discordControlSessionToken,
 }: {
   onToast: (tone: "info" | "success" | "error", message: string) => void;
   resolvedSocialApiBaseUrl: string | null;
   socialApiIsOverride: boolean;
+  discordControlSessionToken: string | null;
 }) {
   const [sub, setSub] = useState<SocialSub>("friends");
   const [busy, setBusy] = useState(false);
@@ -541,7 +543,10 @@ export function SocialPanel({
     }
   };
 
-  const acceptedFriends = localFriends.filter((f) => isAcceptedFriendStatus(f.status));
+  const acceptedFriends = useMemo(
+    () => localFriends.filter((f) => isAcceptedFriendStatus(f.status)),
+    [localFriends],
+  );
 
   const peerRankFetchKey = useMemo(() => {
     const ids = new Set<number>();
@@ -701,7 +706,14 @@ export function SocialPanel({
     [selfOsuId, localFriends, osuFriendsRaw, osuProfileNamesById],
   );
 
-  useBattleDesktopNotifications(socialGet, selfOsuId, resolvedSocialApiBaseUrl, socialFriendsLoadDone, displayNameForOsu);
+  useBattleDesktopNotifications(
+    socialGet,
+    selfOsuId,
+    resolvedSocialApiBaseUrl,
+    socialFriendsLoadDone,
+    displayNameForOsu,
+    discordControlSessionToken,
+  );
 
   const leaderboardParticipants = useMemo(() => {
     const out: Array<{ osuId: number; label: string }> = [];

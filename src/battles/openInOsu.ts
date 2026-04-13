@@ -7,7 +7,7 @@ export function canOpenBattleSubmitInOsu(beatmapsetId: number, fixedBeatmapId: n
   return Number.isFinite(beatmapsetId) && beatmapsetId > 0;
 }
 
-/** Opens the fixed difficulty, or the set (any diff) when no fixed beatmap. */
+/** Opens a specific beatmap when `fixedBeatmapId` is set; otherwise opens the beatmap set (any difficulty). Callers may pass a tier-resolved beatmap id for relative-PP battles. */
 export async function openBattleSubmitTargetInOsu(
   beatmapsetId: number,
   fixedBeatmapId: number | null,

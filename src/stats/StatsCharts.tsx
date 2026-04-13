@@ -20,7 +20,14 @@ import {
   YAxis,
   ZAxis,
 } from "recharts";
-import { RECHARTS_TOOLTIP_PROPS } from "./statsConstants";
+import {
+  CHART_AXIS_BASE_PROPS,
+  CHART_CURSOR_PROPS,
+  CHART_GRID_PROPS,
+  CHART_TICK,
+  CHART_TICK_DENSE,
+  RECHARTS_TOOLTIP_PROPS,
+} from "../charts/rechartsTheme";
 
 type GradeSlice = { name: string; value: number; fill: string };
 
@@ -54,9 +61,9 @@ export function StatsCharts({
             {ppByModeData.some((d) => d.pp > 0) ? (
               <ResponsiveContainer width="100%" height={240}>
                 <BarChart data={ppByModeData} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis dataKey="name" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
+                  <YAxis {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
                   <Tooltip {...RECHARTS_TOOLTIP_PROPS} formatter={(v: number) => [`${v} pp`, "PP"]} />
                   <Bar dataKey="pp" fill="var(--accent)" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -74,7 +81,7 @@ export function StatsCharts({
               <ResponsiveContainer width="100%" height={280}>
                 <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="75%">
                   <PolarGrid />
-                  <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
+                  <PolarAngleAxis dataKey="metric" tick={CHART_TICK_DENSE} />
                   <Radar name="You" dataKey="You" stroke="var(--lb-radar-a)" fill="var(--lb-radar-a)" fillOpacity={0.35} />
                   <Legend />
                 </RadarChart>
@@ -111,9 +118,14 @@ export function StatsCharts({
             {recentSeries.length > 1 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={recentSeries} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis
+                    dataKey="label"
+                    {...CHART_AXIS_BASE_PROPS}
+                    tick={CHART_TICK_DENSE}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
                   <Tooltip {...RECHARTS_TOOLTIP_PROPS} formatter={(v: number) => [`${v} pp`, "PP"]} />
                   <Area type="monotone" dataKey="pp" stroke="var(--accent)" fill="var(--accent-glow)" />
                 </AreaChart>
@@ -130,9 +142,9 @@ export function StatsCharts({
             {topPlaysData.length > 0 ? (
               <ResponsiveContainer width="100%" height={Math.max(220, topPlaysData.length * 26)}>
                 <BarChart data={topPlaysData} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="name" width={200} tick={{ fontSize: 10 }} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis type="number" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
+                  <YAxis type="category" dataKey="name" width={200} {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK_DENSE} />
                   <Tooltip {...RECHARTS_TOOLTIP_PROPS} formatter={(v: number) => [`${v} pp`, "PP"]} />
                   <Bar dataKey="pp" fill="var(--lb-bar-me)" radius={[0, 4, 4, 0]} />
                 </BarChart>
@@ -149,9 +161,9 @@ export function StatsCharts({
             {ppHist.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={ppHist} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis dataKey="bucket" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis dataKey="bucket" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK_DENSE} />
+                  <YAxis {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} allowDecimals={false} />
                   <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                   <Bar dataKey="count" fill="var(--lb-grade-a)" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -168,9 +180,9 @@ export function StatsCharts({
             {starHist.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
                 <BarChart data={starHist} margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis dataKey="bucket" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis dataKey="bucket" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK_DENSE} />
+                  <YAxis {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} allowDecimals={false} />
                   <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                   <Bar dataKey="count" fill="var(--lb-bar-friend)" radius={[4, 4, 0, 0]} />
                 </BarChart>
@@ -187,9 +199,9 @@ export function StatsCharts({
             {modsFreq.length > 0 ? (
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={modsFreq} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 10 }} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis type="number" {...CHART_AXIS_BASE_PROPS} allowDecimals={false} tick={CHART_TICK} />
+                  <YAxis type="category" dataKey="name" width={120} {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK_DENSE} />
                   <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                   <Bar dataKey="value" fill="var(--warn)" radius={[0, 4, 4, 0]} />
                 </BarChart>
@@ -206,13 +218,13 @@ export function StatsCharts({
             {scatterData.length > 0 ? (
               <ResponsiveContainer width="100%" height={260}>
                 <ScatterChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                  <XAxis type="number" dataKey="pp" name="PP" tick={{ fontSize: 11 }} />
-                  <YAxis type="number" dataKey="acc" name="Acc %" tick={{ fontSize: 11 }} />
+                  <CartesianGrid {...CHART_GRID_PROPS} />
+                  <XAxis type="number" dataKey="pp" name="PP" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
+                  <YAxis type="number" dataKey="acc" name="Acc %" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
                   <ZAxis range={[40, 40]} />
                   <Tooltip
                     {...RECHARTS_TOOLTIP_PROPS}
-                    cursor={{ strokeDasharray: "3 3" }}
+                    cursor={CHART_CURSOR_PROPS}
                     formatter={(v: number, name: string) => [v, name]}
                   />
                   <Scatter name="Scores" data={scatterData} fill="var(--ok)" />

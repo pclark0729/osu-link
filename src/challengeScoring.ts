@@ -261,3 +261,39 @@ export function pickBestChallengePlay(
   }
   return best;
 }
+
+/**
+ * For a beatmap set’s difficulties (osu! API `beatmaps` array), pick the ranked osu! difficulty whose ★ rating is
+ * closest to the player’s assigned tier ({@link medianStarsFromBestScores}), preferring maps within
+ * {@link ASSIGNED_STAR_MAX_DELTA} ★ (same band as {@link pickBestChallengePlay}). Used so “Open in osu!” can launch
+ * a specific map instead of only the whole set.
+ */
+export function pickBeatmapIdForAssignedTier(beatmaps: unknown[], preferredStars: number | null): number | null {
+  if (preferredStars == null || !Number.isFinite(preferredStars) || preferredStars <= 0) return null;
+  type Row = { id: number; stars: number };
+  const rows: Row[] = [];
+  for (const item of beatmaps) {
+    const bm = asRecord(item);
+    if (String(bm.mode ?? "") !== "osu") continue;
+    const st = String(bm.status ?? "").toLowerCase();
+    if (st && st !== "ranked") continue;
+    const id = Number(bm.id);
+    const stars = Number(bm.difficulty_rating);
+    if (!Number.isFinite(id) || id <= 0 || !Number.isFinite(stars) || stars <= 0) continue;
+    rows.push({ id, stars });
+  }
+  if (rows.length === 0) return null;
+
+  const inBand = rows.filter((r) => Math.abs(r.stars - preferredStars) <= ASSIGNED_STAR_MAX_DELTA);
+  const pool = inBand.length > 0 ? inBand : rows;
+
+  let best: Row | null = null;
+  for (const r of pool) {
+    const d = Math.abs(r.stars - preferredStars);
+    const bestD = best == null ? Infinity : Math.abs(best.stars - preferredStars);
+    if (best == null || d < bestD || (d === bestD && r.id < best.id)) {
+      best = r;
+    }
+  }
+  return best?.id ?? null;
+}

@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
-import { ASSIGNED_STAR_MAX_DELTA } from "../challengeScoring";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ASSIGNED_STAR_MAX_DELTA, pickBeatmapIdForAssignedTier } from "../challengeScoring";
 import { canOpenBattleSubmitInOsu, openBattleSubmitTargetInOsu } from "./openInOsu";
 
 export type FixedBeatmapDetail = { version: string; stars: number };
@@ -13,6 +14,8 @@ type BattleSubmitRequirementProps = {
   creatorId: number;
   opponentId: number;
   medianStarsByOsuId: Map<number, number | null>;
+  /** Signed-in user’s osu! id — “Open in osu!” uses their assigned tier to pick a difficulty when the battle is not fixed. */
+  viewerOsuId: number | null;
   displayNameForOsu: (osuId: number) => string;
   /** Called when handing off to osu!stable fails (desktop app only). */
   onOpenInOsuError?: (message: string) => void;
@@ -26,27 +29,90 @@ export function BattleSubmitRequirement({
   creatorId,
   opponentId,
   medianStarsByOsuId,
+  viewerOsuId,
   displayNameForOsu,
   onOpenInOsuError,
 }: BattleSubmitRequirementProps) {
   const setUrl = Number.isFinite(beatmapsetId) ? `https://osu.ppy.sh/beatmapsets/${beatmapsetId}` : null;
-  const showOpenInOsu = canOpenBattleSubmitInOsu(beatmapsetId, fixedBeatmapId);
+  const [tierOpenBeatmapId, setTierOpenBeatmapId] = useState<number | null>(null);
   const [openingOsu, setOpeningOsu] = useState(false);
   const openingRef = useRef(false);
+
+  const preferredStarsForViewer =
+    viewerOsuId != null && Number.isFinite(viewerOsuId)
+      ? medianStarsByOsuId.get(viewerOsuId)
+      : null;
+  const medOk =
+    preferredStarsForViewer != null &&
+    Number.isFinite(preferredStarsForViewer) &&
+    preferredStarsForViewer > 0;
+
+  useEffect(() => {
+    setTierOpenBeatmapId(null);
+    if (!isTauri()) return;
+    if (!relativePp || fixedBeatmapId != null) return;
+    if (!Number.isFinite(beatmapsetId) || beatmapsetId <= 0) return;
+    if (viewerOsuId == null || !Number.isFinite(viewerOsuId)) return;
+    if (!medOk) return;
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId });
+        if (cancelled) return;
+        const root = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+        const bms = root.beatmaps;
+        const list = Array.isArray(bms) ? bms : [];
+        const picked = pickBeatmapIdForAssignedTier(list, preferredStarsForViewer);
+        if (!cancelled) setTierOpenBeatmapId(picked);
+      } catch {
+        if (!cancelled) setTierOpenBeatmapId(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [beatmapsetId, relativePp, fixedBeatmapId, viewerOsuId, medOk, preferredStarsForViewer]);
+
+  const effectiveOpenBeatmapId =
+    fixedBeatmapId != null && Number.isFinite(fixedBeatmapId) ? fixedBeatmapId : tierOpenBeatmapId;
+
+  const showOpenInOsu = canOpenBattleSubmitInOsu(beatmapsetId, effectiveOpenBeatmapId);
 
   const handleOpenInOsu = useCallback(async () => {
     if (openingRef.current) return;
     openingRef.current = true;
     setOpeningOsu(true);
     try {
-      await openBattleSubmitTargetInOsu(beatmapsetId, fixedBeatmapId);
+      let bm =
+        fixedBeatmapId != null && Number.isFinite(fixedBeatmapId) ? fixedBeatmapId : tierOpenBeatmapId;
+      if (bm == null && relativePp && medOk && Number.isFinite(beatmapsetId) && beatmapsetId > 0 && isTauri()) {
+        try {
+          const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId });
+          const root = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>) : {};
+          const bms = root.beatmaps;
+          const list = Array.isArray(bms) ? bms : [];
+          bm = pickBeatmapIdForAssignedTier(list, preferredStarsForViewer);
+        } catch {
+          bm = null;
+        }
+      }
+      await openBattleSubmitTargetInOsu(beatmapsetId, bm);
     } catch (e) {
       onOpenInOsuError?.(String(e));
     } finally {
       openingRef.current = false;
       setOpeningOsu(false);
     }
-  }, [beatmapsetId, fixedBeatmapId, onOpenInOsuError]);
+  }, [
+    beatmapsetId,
+    fixedBeatmapId,
+    tierOpenBeatmapId,
+    relativePp,
+    medOk,
+    preferredStarsForViewer,
+    onOpenInOsuError,
+  ]);
 
   const head = (title: string) => (
     <div className="battles-panel__submit-req-head">
@@ -148,6 +214,13 @@ export function BattleSubmitRequirement({
             this beatmap set
           </a>{" "}
           in your osu! recent scores (stable).
+          {medOk && viewerOsuId != null ? (
+            <>
+              {" "}
+              In the desktop app, <strong>Open in osu!</strong> picks the ranked difficulty on this set closest to your
+              assigned ~★.
+            </>
+          ) : null}
         </p>
       ) : null}
     </div>

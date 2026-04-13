@@ -9,6 +9,53 @@ const PROTOCOL_V = 1;
 const PAIRING_TTL_MS = 15 * 60 * 1000;
 const COMMAND_TIMEOUT_MS = 45_000;
 const PAIRING_BODY_MAX = 4096;
+/** Discord embed title max length */
+const NOTIFY_TITLE_MAX = 256;
+/** Discord embed description max length */
+const NOTIFY_BODY_MAX = 4096;
+
+/**
+ * @param {string} botToken
+ * @param {string} recipientId
+ * @param {string} title
+ * @param {string} description
+ */
+async function sendDiscordDmEmbed(botToken, recipientId, title, description) {
+  const r1 = await fetch("https://discord.com/api/v10/users/@me/channels", {
+    method: "POST",
+    headers: {
+      Authorization: `Bot ${botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ recipient_id: recipientId }),
+  });
+  if (!r1.ok) {
+    const t = await r1.text();
+    throw new Error(`create_dm_http_${r1.status}:${t.slice(0, 120)}`);
+  }
+  /** @type {{ id?: string }} */
+  const ch = await r1.json();
+  const channelId = typeof ch?.id === "string" ? ch.id : "";
+  if (!channelId) {
+    throw new Error("create_dm_no_channel");
+  }
+  /** @type {Record<string, unknown>} */
+  const embed = { color: 0x5865f2 };
+  if (title) embed.title = title;
+  if (description) embed.description = description;
+  const r2 = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bot ${botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ embeds: [embed] }),
+  });
+  if (!r2.ok) {
+    const t = await r2.text();
+    throw new Error(`send_message_http_${r2.status}:${t.slice(0, 120)}`);
+  }
+}
 
 /** @param {import('better-sqlite3').Database} db */
 function pruneExpiredPairings(db) {
@@ -76,10 +123,12 @@ function readBody(req) {
  * @param {{ error: Function, warn: Function, info: Function }} opts.log
  * @param {(ip: string) => boolean} opts.checkPairingRate
  * @param {(ip: string) => boolean} [opts.checkInternalRate]
+ * @param {(ip: string) => boolean} [opts.checkDiscordNotifyRate]
  */
 export function createControlRelay(opts) {
   const { db, log, checkPairingRate } = opts;
   const checkInternalRate = opts.checkInternalRate ?? (() => true);
+  const checkDiscordNotifyRate = opts.checkDiscordNotifyRate ?? (() => true);
   const internalSecret = (process.env.DISCORD_INTERNAL_SECRET || "").trim();
 
   /** @type {Map<string, import('ws').WebSocket>} */
@@ -384,6 +433,62 @@ export function createControlRelay(opts) {
       }
       socketsByDiscord.delete(row.discord_user_id);
       json(res, 200, { ok: true, revoked: true });
+      return true;
+    }
+
+    if (pathname === "/api/v1/discord-control/notify" && method === "POST") {
+      if (!checkDiscordNotifyRate(ip)) {
+        json(res, 429, { error: "rate_limited" });
+        return true;
+      }
+      const botToken = (process.env.DISCORD_BOT_TOKEN || "").trim();
+      if (!botToken) {
+        json(res, 503, { error: "discord_notify_unconfigured" });
+        return true;
+      }
+      const auth = req.headers.authorization;
+      const bearer =
+        typeof auth === "string" && auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+      if (!bearer) {
+        json(res, 401, { error: "missing_token" });
+        return true;
+      }
+      let body;
+      try {
+        body = await readBody(req);
+      } catch (e) {
+        if (/** @type {Error} */ (e).message === "body_too_large") {
+          json(res, 413, { error: "body_too_large" });
+          return true;
+        }
+        json(res, 400, { error: "invalid_json" });
+        return true;
+      }
+      const titleRaw = typeof body?.title === "string" ? body.title.trim() : "";
+      const bodyRaw = typeof body?.body === "string" ? body.body.trim() : "";
+      if (!titleRaw && !bodyRaw) {
+        json(res, 400, { error: "invalid_body" });
+        return true;
+      }
+      const tokenHash = hashDiscordSessionToken(bearer);
+      const row = db
+        .prepare("SELECT discord_user_id FROM discord_control_sessions WHERE token_hash = ?")
+        .get(tokenHash);
+      if (!row) {
+        json(res, 401, { error: "not_linked" });
+        return true;
+      }
+      const discordUserId = row.discord_user_id;
+      const title = titleRaw.slice(0, NOTIFY_TITLE_MAX);
+      const desc = bodyRaw.slice(0, NOTIFY_BODY_MAX);
+      try {
+        await sendDiscordDmEmbed(botToken, discordUserId, title, desc);
+        json(res, 200, { ok: true });
+      } catch (e) {
+        const msg = /** @type {Error} */ (e).message || String(e);
+        log.warn(`[control] discord notify failed: ${msg}`);
+        json(res, 502, { error: "discord_notify_failed" });
+      }
       return true;
     }
 

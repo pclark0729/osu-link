@@ -1,6 +1,10 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useState, type Dispatch, type SetStateAction } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { saveDesktopNotificationsEnabled } from "./desktopNotify";
+import {
+  loadDiscordBattleNotificationsEnabled,
+  saveDiscordBattleNotificationsEnabled,
+} from "./discordBattleNotify";
 import {
   DEFAULT_HOTKEY_FOCUS_SEARCH,
   DEFAULT_HOTKEY_RANDOM_CURATE,
@@ -81,6 +85,9 @@ export function SettingsPanel({
   discordWsConnected: boolean;
 }) {
   const resolvedApi = resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl);
+  const [discordBattleNotify, setDiscordBattleNotify] = useState(() =>
+    loadDiscordBattleNotificationsEnabled(),
+  );
 
   return (
     <div className="panel panel-elevated settings-panel">
@@ -388,6 +395,20 @@ export function SettingsPanel({
               {discordWsConnected ? "on" : "off"}
               {discordRemote?.online != null && ` · relay sees desktop ${discordRemote.online ? "online" : "offline"}`}
             </p>
+          )}
+          {isTauri() && settings.discordControlSessionToken && discordRemote?.linked && (
+            <label className="field field--checkbox u-mb-0">
+              <input
+                type="checkbox"
+                checked={discordBattleNotify}
+                onChange={(e) => {
+                  const v = e.target.checked;
+                  setDiscordBattleNotify(v);
+                  saveDiscordBattleNotificationsEnabled(v);
+                }}
+              />
+              <span>Mirror battle alerts to Discord (DM)</span>
+            </label>
           )}
           {!isTauri() && (
             <p className="hint" role="status">

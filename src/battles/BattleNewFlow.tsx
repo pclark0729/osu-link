@@ -16,9 +16,25 @@ export type BattleRematchSeed = {
   beatmapsetId: number;
   title: string;
   artist: string;
+  /** Beatmap mapper username when known (e.g. rematch from API display). */
+  creator?: string;
   relativePp: boolean;
   fixedBeatmapId: number | null;
 };
+
+type BattleMapPickRow = {
+  id: number;
+  title: string;
+  artist: string;
+  creator: string;
+  starRange: string | null;
+};
+
+function formatBattleMapReviewLine(pick: BattleMapPickRow): string {
+  const mapper = pick.creator.trim();
+  const mid = mapper ? ` · mapped by ${mapper}` : "";
+  return `${pick.artist} — ${pick.title}${mid} (#${pick.id})`;
+}
 
 type BattleNewFlowProps = {
   uiLocked: boolean;
@@ -55,16 +71,9 @@ export function BattleNewFlow({
   const [battleOpponentFriend, setBattleOpponentFriend] = useState("");
   const [battleOpponentManual, setBattleOpponentManual] = useState("");
   const [battleMapQuery, setBattleMapQuery] = useState("");
-  const [battleMapResults, setBattleMapResults] = useState<
-    Array<{ id: number; title: string; artist: string; starRange: string | null }>
-  >([]);
+  const [battleMapResults, setBattleMapResults] = useState<BattleMapPickRow[]>([]);
   const [battleMapSearching, setBattleMapSearching] = useState(false);
-  const [battlePick, setBattlePick] = useState<{
-    id: number;
-    title: string;
-    artist: string;
-    starRange: string | null;
-  } | null>(null);
+  const [battlePick, setBattlePick] = useState<BattleMapPickRow | null>(null);
   const [battleRelativePp, setBattleRelativePp] = useState(true);
   const [battleDiffOptions, setBattleDiffOptions] = useState<NeuSelectOption[]>([
     { value: "", label: "Any difficulty" },
@@ -94,6 +103,7 @@ export function BattleNewFlow({
       id: rematchSeed.beatmapsetId,
       title: rematchSeed.title,
       artist: rematchSeed.artist,
+      creator: rematchSeed.creator ?? "",
       starRange: null,
     });
     setBattleRelativePp(rematchSeed.relativePp);
@@ -127,7 +137,7 @@ export function BattleNewFlow({
             input: { q, s: "ranked", sort: "plays_desc", m: 0 },
           });
           const sets = (res.beatmapsets as unknown[]) || [];
-          const out: Array<{ id: number; title: string; artist: string; starRange: string | null }> = [];
+          const out: BattleMapPickRow[] = [];
           for (const x of sets.slice(0, 12)) {
             const r = asRecord(x);
             const id = Number(r.id);
@@ -136,6 +146,7 @@ export function BattleNewFlow({
               id,
               title: String(r.title ?? ""),
               artist: String(r.artist ?? ""),
+              creator: String(r.creator ?? ""),
               starRange: osuRankedStarRangeFromBeatmapset(r),
             });
           }
@@ -383,11 +394,16 @@ export function BattleNewFlow({
     }
     setBusy(true);
     try {
+      const display: Record<string, string> = {
+        title: battlePick.title,
+        artist: battlePick.artist,
+      };
+      if (battlePick.creator.trim()) display.creator = battlePick.creator.trim();
       const body: Record<string, unknown> = {
         opponentOsuId: opponentOsuId,
         beatmapsetId: battlePick.id,
         windowEndMs,
-        display: { title: battlePick.title, artist: battlePick.artist },
+        display,
       };
       if (battleRelativePp) {
         body.relativePp = true;
@@ -433,8 +449,13 @@ export function BattleNewFlow({
     }
     setBusy(true);
     try {
+      const chDisplay: Record<string, string> = {
+        title: battlePick.title,
+        artist: battlePick.artist,
+      };
+      if (battlePick.creator.trim()) chDisplay.creator = battlePick.creator.trim();
       const rulesJson: Record<string, unknown> = {
-        display: { title: battlePick.title, artist: battlePick.artist },
+        display: chDisplay,
       };
       if (chGlobal) rulesJson.global = true;
       const body: Record<string, unknown> = {
@@ -633,6 +654,9 @@ export function BattleNewFlow({
                               <span className="battle-map-pick-text">
                                 <span className="battle-map-pick-title">{m.title}</span>
                                 <span className="battle-map-pick-artist">{m.artist}</span>
+                                {m.creator.trim() ? (
+                                  <span className="battle-map-pick-mapper">mapped by {m.creator}</span>
+                                ) : null}
                               </span>
                               <span className="battle-map-pick-aside">
                                 <span className="battle-map-pick-id">#{m.id}</span>
@@ -654,6 +678,9 @@ export function BattleNewFlow({
                       <strong>{battlePick.title}</strong>
                       <span className="battle-selected-dash"> — </span>
                       {battlePick.artist}
+                      {battlePick.creator.trim() ? (
+                        <span className="battle-selected-mapper"> · mapped by {battlePick.creator}</span>
+                      ) : null}
                       <span className="hint battle-selected-set">
                         {" "}
                         · set {battlePick.id}
@@ -779,9 +806,7 @@ export function BattleNewFlow({
                   </li>
                   <li>
                     <strong>Map</strong>
-                    <span>
-                      {battlePick ? `${battlePick.artist} — ${battlePick.title} (#${battlePick.id})` : "—"}
-                    </span>
+                    <span>{battlePick ? formatBattleMapReviewLine(battlePick) : "—"}</span>
                   </li>
                   <li>
                     <strong>Mode</strong>
@@ -812,9 +837,7 @@ export function BattleNewFlow({
                 <ul className="battle-flow__review-list">
                   <li>
                     <strong>Map</strong>
-                    <span>
-                      {battlePick ? `${battlePick.artist} — ${battlePick.title} (#${battlePick.id})` : "—"}
-                    </span>
+                    <span>{battlePick ? formatBattleMapReviewLine(battlePick) : "—"}</span>
                   </li>
                   <li>
                     <strong>Difficulty</strong>

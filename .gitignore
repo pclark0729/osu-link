@@ -16,6 +16,9 @@ src-tauri/target
 dist-ssr
 *.local
 
+# Git worktrees (agent isolation)
+.worktrees/
+
 # Tauri updater signing key (never commit)
 .tauri/osu-link.key
 

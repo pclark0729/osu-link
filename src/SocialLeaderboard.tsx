@@ -17,17 +17,12 @@ import {
 } from "recharts";
 import { NeuSelect, type NeuSelectOption } from "./NeuSelect";
 import { SocialLeaderboardLoadingSkeleton } from "./Skeleton";
-
-const RECHARTS_TOOLTIP_PROPS = {
-  contentStyle: {
-    background: "var(--surface-2)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: "var(--radius-sm)",
-    color: "var(--text)",
-  },
-  labelStyle: { color: "var(--text-secondary)" },
-  itemStyle: { color: "var(--text)" },
-} as const;
+import {
+  CHART_AXIS_BASE_PROPS,
+  CHART_GRID_PROPS,
+  CHART_TICK,
+  RECHARTS_TOOLTIP_PROPS,
+} from "./charts/rechartsTheme";
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -584,9 +579,9 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
                 {ppChartData.length > 0 ? (
                   <ResponsiveContainer width="100%" height={Math.max(200, ppChartData.length * 28)}>
                     <BarChart data={ppChartData} layout="vertical" margin={{ left: 8, right: 16, top: 8, bottom: 8 }}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                      <XAxis type="number" tick={{ fontSize: 11 }} />
-                      <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11 }} />
+                      <CartesianGrid {...CHART_GRID_PROPS} />
+                      <XAxis type="number" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
+                      <YAxis type="category" dataKey="name" width={100} {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
                       <Tooltip
                         {...RECHARTS_TOOLTIP_PROPS}
                         formatter={(v: number) => [`${v} pp`, "PP"]}
@@ -613,9 +608,9 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
                 {gradeAgg.some((g) => g.value > 0) ? (
                   <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={gradeAgg}>
-                      <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-                      <XAxis dataKey="name" />
-                      <YAxis />
+                      <CartesianGrid {...CHART_GRID_PROPS} />
+                      <XAxis dataKey="name" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
+                      <YAxis {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
                       <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                       <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                         {gradeAgg.map((e, i) => (
@@ -642,7 +637,7 @@ export function SocialLeaderboard({ meId, participants, refreshSignal, onToast }
                   <ResponsiveContainer width="100%" height={280}>
                     <RadarChart data={radarData} cx="50%" cy="50%" outerRadius="75%">
                       <PolarGrid />
-                      <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11 }} />
+                      <PolarAngleAxis dataKey="metric" tick={CHART_TICK} />
                       <Radar
                         name={radarCompareLabel}
                         dataKey="A"

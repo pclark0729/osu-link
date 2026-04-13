@@ -44,11 +44,14 @@ When the SQLite database is available, the HTTP server (default port **`PORT + 1
 | POST | `/api/v1/discord-control/pairing` | Register a pairing code + `tokenHash` (SHA-256 hex of session token) from osu-link |
 | GET | `/api/v1/discord-control/status` | `Authorization: Bearer <session token>` — link status |
 | POST | `/api/v1/discord-control/revoke` | Revoke session (Bearer token) |
+| POST | `/api/v1/discord-control/notify` | `Authorization: Bearer <session token>` — JSON `{ "title": string, "body": string }` (both optional but at least one non-empty after trim); sends a **DM** to the linked Discord user via Discord REST (requires **`DISCORD_BOT_TOKEN`** on the party-server, same token as the bot) |
 | GET | WebSocket `/control` | Outbound desktop session (Bearer token); relays Discord commands |
 | POST | `/internal/discord/link` | **Loopback only** — bot completes pairing (`code`, `discordUserId`) |
 | POST | `/internal/discord/command` | **Loopback only** — bot sends `ping`, `download`, `search` to connected desktop |
 
 Set **`DISCORD_INTERNAL_SECRET`** in the party-server environment (same value the Discord bot uses in `X-Internal-Secret`). Never expose `/internal/*` publicly.
+
+For **battle / app notifications to Discord**, set **`DISCORD_BOT_TOKEN`** on the party-server (same application bot token as `discord-bot`). Without it, `POST /api/v1/discord-control/notify` returns **`503`** with `discord_notify_unconfigured`. On a Pi, `install-pi.sh` copies the token from `/etc/osu-link-discord.env` into `/etc/osu-link-party.env` when the Discord bot is installed.
 
 TLS: WebSocket upgrades for **`/control`** must reach the **HTTP** port (`PORT + 1`), not the party lobby WebSocket port (`PORT`). The `install-pi.sh` Caddy snippet routes `/control*`, `/api/*`, `/internal/*`, and `/health*` to that HTTP port.
 
@@ -67,8 +70,10 @@ TLS: WebSocket upgrades for **`/control`** must reach the **HTTP** port (`PORT +
 | `DEBUG_WS` | — | Set to `1` to log each client message `type=` (no full payloads). |
 | `SHUTDOWN_TIMEOUT_MS` | `10000` | Max wait when stopping (SIGTERM/SIGINT). |
 | `DISCORD_INTERNAL_SECRET` | — | Shared secret for `POST /internal/discord/*` (must match `discord-bot` on the Pi). |
+| `DISCORD_BOT_TOKEN` | — | Bot token for `POST /api/v1/discord-control/notify` (same token as `discord-bot`; optional if you do not use Discord DMs). |
 | `DISCORD_PAIRING_RATE_MAX` | `30` | Max pairing POSTs per IP per minute. |
 | `DISCORD_INTERNAL_RATE_MAX` | `120` | Max internal bot POSTs per IP per minute. |
+| `DISCORD_NOTIFY_RATE_MAX` | `30` | Max notify POSTs per IP per minute. |
 
 ## Health & readiness (operations)
 

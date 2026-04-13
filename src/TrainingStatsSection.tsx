@@ -1,22 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
+  CHART_AXIS_BASE_PROPS,
+  CHART_GRID_PROPS,
+  CHART_TICK,
+  RECHARTS_TOOLTIP_PROPS,
+} from "./charts/rechartsTheme";
+import {
   computeTrainingAggregates,
   loadTrainingHistory,
   trainVsGeneralAccInsight,
   type TrainingHistoryFile,
 } from "./trainHistory";
-
-const RECHARTS_TOOLTIP_PROPS = {
-  contentStyle: {
-    background: "var(--surface-2)",
-    border: "1px solid var(--border-strong)",
-    borderRadius: "var(--radius-sm)",
-    color: "var(--text)",
-  },
-  labelStyle: { color: "var(--text-secondary)" },
-  itemStyle: { color: "var(--text)" },
-} as const;
 
 export function TrainingStatsSection({
   recentAccSample,
@@ -115,9 +110,9 @@ export function TrainingStatsSection({
           <div className="stats-chart-wrap" style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={sessionChart} margin={{ top: 8, right: 8, left: 8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" />
-                <XAxis dataKey="label" tick={{ fill: "var(--text-secondary)", fontSize: 11 }} />
-                <YAxis tick={{ fill: "var(--text-secondary)", fontSize: 11 }} allowDecimals={false} />
+                <CartesianGrid {...CHART_GRID_PROPS} />
+                <XAxis dataKey="label" {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} />
+                <YAxis {...CHART_AXIS_BASE_PROPS} tick={CHART_TICK} allowDecimals={false} />
                 <Tooltip {...RECHARTS_TOOLTIP_PROPS} />
                 <Area
                   type="monotone"

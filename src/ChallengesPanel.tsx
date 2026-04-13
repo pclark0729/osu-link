@@ -18,7 +18,9 @@ function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
-function parseChallengeRulesDisplay(r: Record<string, unknown>): { artist: string; title: string } | null {
+function parseChallengeRulesDisplay(
+  r: Record<string, unknown>,
+): { artist: string; title: string; creator?: string } | null {
   const raw = r.rules_json;
   let obj: unknown = raw;
   if (typeof raw === "string") {
@@ -36,7 +38,12 @@ function parseChallengeRulesDisplay(r: Record<string, unknown>): { artist: strin
   const title = String(dr.title ?? "").trim();
   const artist = String(dr.artist ?? "").trim();
   if (!title && !artist) return null;
-  return { title: title || "—", artist: artist || "—" };
+  const creator = String(dr.creator ?? "").trim();
+  return {
+    title: title || "—",
+    artist: artist || "—",
+    ...(creator ? { creator } : {}),
+  };
 }
 
 function isUnweightedFlag(v: ChallengeScoreRow["is_unweighted"]): boolean {
@@ -367,6 +374,7 @@ export function ChallengesPanel({
             const disp = parseChallengeRulesDisplay(c as unknown as Record<string, unknown>);
             const titleMain = disp ? disp.title : `Set #${String(c.beatmapset_id ?? "—")}`;
             const artistLine = disp ? disp.artist : null;
+            const mapperLine = disp?.creator?.trim() ? disp.creator.trim() : null;
             const chBm = c.beatmap_id;
             const fixedDiff = chBm != null && Number.isFinite(chBm) ? chBm : null;
             const diffMode = parseChallengeDifficultyMode(c.rules_json, c.beatmap_id);
@@ -411,6 +419,9 @@ export function ChallengesPanel({
                       <span className="social-challenge-card__artist">{artistLine}</span>
                     ) : null}
                     {titleContent}
+                    {mapperLine ? (
+                      <span className="social-challenge-card__mapper">mapped by {mapperLine}</span>
+                    ) : null}
                   </div>
                   <span className="challenges-pill challenges-pill--time" title={deadlineLabel}>
                     <Clock size={13} strokeWidth={2.25} aria-hidden />

@@ -298,6 +298,22 @@ EOF
     systemctl disable "${DISCORD_SERVICE_NAME}" 2>/dev/null || true
     systemctl stop "${DISCORD_SERVICE_NAME}" 2>/dev/null || true
   fi
+
+  # party-server uses the same bot token for Discord REST (battle DM notifications via /api/v1/discord-control/notify).
+  if [[ -f /etc/osu-link-discord.env ]]; then
+    DISCORD_TOKEN_SYNC="$(grep '^DISCORD_BOT_TOKEN=' /etc/osu-link-discord.env 2>/dev/null | sed 's/^DISCORD_BOT_TOKEN=//' | tr -d '"' || true)"
+    if [[ -n "${DISCORD_TOKEN_SYNC}" ]]; then
+      if grep -q '^DISCORD_BOT_TOKEN=' /etc/osu-link-party.env 2>/dev/null; then
+        grep -v '^DISCORD_BOT_TOKEN=' /etc/osu-link-party.env > /tmp/osu-link-party.env.$$
+        mv /tmp/osu-link-party.env.$$ /etc/osu-link-party.env
+        chmod 644 /etc/osu-link-party.env
+      fi
+      echo "DISCORD_BOT_TOKEN=${DISCORD_TOKEN_SYNC}" >> /etc/osu-link-party.env
+      echo "    DISCORD_BOT_TOKEN synced to /etc/osu-link-party.env (Discord notify API)"
+      systemctl restart "${SERVICE_NAME}" || true
+      sleep 1
+    fi
+  fi
 fi
 
 if [[ "${SETUP_CADDY}" == "1" ]]; then

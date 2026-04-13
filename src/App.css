@@ -61,6 +61,9 @@
   --inset-hairline: inset 0 0 0 1px rgba(255, 255, 255, 0.045);
   /* Secondary accent — charts, links, cool highlights */
   --accent-secondary: #6b9cff;
+  /* Charts */
+  --chart-grid: color-mix(in srgb, var(--border-strong) 85%, transparent);
+  --chart-grid-strong: color-mix(in srgb, var(--border-strong) 55%, rgba(255, 255, 255, 0.16));
   /* Glass surfaces (cards / panels) */
   --glass-bg: rgba(22, 22, 34, 0.58);
   --glass-border: rgba(255, 255, 255, 0.04);
@@ -1252,6 +1255,13 @@ html.tauri:not([data-window-maximized="true"]) .title-bar-controls {
 .view-chip--warn {
   background: var(--tint-warn-soft);
   color: color-mix(in srgb, var(--warn) 80%, var(--text));
+}
+
+/* Search: hero + meta sit above the results grid so icon menus (absolute) aren’t painted under cards */
+.search-download-panel.panel-elevated {
+  position: relative;
+  z-index: 5000;
+  isolation: isolate;
 }
 
 /* Search: hero wrapper — no frosted strip stacked on the card */
@@ -2587,10 +2597,27 @@ button.danger:disabled {
   display: flex;
   align-items: center;
   gap: 0.35rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Wide positioning context for the filters flyout — avoids shrink-to-fit clipping inside a ~2.35rem <details> box */
+.search-filters-menu-anchor {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
 }
 
 .search-icon-menu {
   position: relative;
+}
+
+/* Must follow .search-icon-menu so filters menu uses the wide .search-filters-menu-anchor as its containing block */
+.search-icon-menu.search-icon-menu--filters {
+  position: static;
 }
 
 .search-icon-menu > summary {
@@ -2665,8 +2692,12 @@ button.danger:disabled {
   position: absolute;
   right: 0;
   top: calc(100% + 0.35rem);
-  z-index: 40;
-  min-width: 17rem;
+  /* Above in-panel controls; whole panel sits in .search-download-panel’s stacking context */
+  z-index: 6000;
+  box-sizing: border-box;
+  min-width: 0;
+  /* Never use % width here — % is the narrow <details>/anchor (~2.35rem) and collapses the flyout on mobile */
+  width: min(22rem, calc(100vw - 1.5rem));
   max-width: min(22rem, calc(100vw - 1.5rem));
   max-height: min(70vh, 32rem);
   overflow-x: hidden;
@@ -2681,9 +2712,30 @@ button.danger:disabled {
 }
 
 .search-icon-menu-panel--filters {
-  min-width: 18.5rem;
+  /* Container for responsive grid — viewport-wide media queries don’t match a narrow flyout */
+  container-type: inline-size;
+  width: min(26rem, calc(100vw - 1.5rem));
   max-width: min(26rem, calc(100vw - 1.5rem));
   max-height: min(78vh, 38rem);
+}
+
+/* Single column in narrow panels; two columns only when the popover is wide enough */
+.search-icon-menu-panel--filters .search-catalog-filters-grid {
+  grid-template-columns: 1fr;
+  min-width: 0;
+}
+
+@container (min-width: 23rem) {
+  .search-icon-menu-panel--filters .search-catalog-filters-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.search-icon-menu-panel--filters .field input:not([type="checkbox"]),
+.search-icon-menu-panel--filters .field textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .search-icon-menu-panel--filters.search-more-options-body {
@@ -2744,6 +2796,17 @@ button.danger:disabled {
   .search-hero-actions .primary {
     flex: 1 1 auto;
     min-width: 0;
+  }
+
+  /* Match main column insets; avoid vw-only width fighting .main-scroll padding */
+  .search-icon-menu-panel {
+    width: min(22rem, calc(100vw - 2 * var(--main-scroll-pad-x)));
+    max-width: min(22rem, calc(100vw - 2 * var(--main-scroll-pad-x)));
+  }
+
+  .search-icon-menu-panel--filters {
+    width: min(26rem, calc(100vw - 2 * var(--main-scroll-pad-x)));
+    max-width: min(26rem, calc(100vw - 2 * var(--main-scroll-pad-x)));
   }
 }
 
@@ -5630,6 +5693,10 @@ button.onboarding-copy {
   border-radius: 0;
   border: none;
   overflow: visible;
+  background: var(--sticky-chrome-surface);
+  backdrop-filter: blur(var(--sticky-chrome-blur)) saturate(1.12);
+  -webkit-backdrop-filter: blur(var(--sticky-chrome-blur)) saturate(1.12);
+  box-shadow: 0 1px 0 var(--sticky-chrome-border);
 }
 
 /* Tab bar lives inside .panel — align bleed to card edges */
@@ -6514,6 +6581,17 @@ button.social-tab {
   text-overflow: ellipsis;
 }
 
+.social-challenge-card__mapper {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted, #888);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .social-challenge-card__title-link,
 .social-challenge-card__title-text {
   font-weight: 650;
@@ -6714,10 +6792,10 @@ button.social-tab {
 .social-list.battles-panel__list li.battles-panel__card {
   flex-direction: column;
   align-items: stretch;
-  gap: 0.5rem;
+  gap: 0.35rem;
   border-bottom: none;
-  margin-bottom: 0.45rem;
-  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.4rem;
+  padding: 0.55rem 0.65rem;
   background: var(--surface-2);
   border-radius: var(--radius);
   border: 1px solid var(--border-strong);
@@ -6739,14 +6817,35 @@ button.social-tab {
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.35rem 0.65rem;
+}
+
+.battles-panel__map-headlines {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.35rem;
+  line-height: 1.3;
 }
 
 .battles-panel__map-title {
   font-weight: 600;
-  flex: 1;
-  min-width: 0;
-  line-height: 1.35;
+  font-size: 0.92rem;
+  line-height: 1.3;
+}
+
+.battles-panel__map-mapper {
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: var(--muted);
+  line-height: 1.25;
+}
+
+.battles-panel__map-mapper-sep {
+  margin-right: 0.25rem;
+  opacity: 0.55;
 }
 
 .battles-panel__status {
@@ -6797,26 +6896,75 @@ button.social-tab {
 }
 
 .battles-panel__meta {
-  font-size: 0.82rem;
+  font-size: 0.74rem;
   line-height: 1.35;
+}
+
+.battles-panel__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.1rem;
+}
+
+.battles-panel__meta-row .battles-panel__meta {
+  min-width: 0;
+}
+
+.battles-panel__meta--time {
+  flex-shrink: 0;
+  margin-left: auto;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .battles-panel__countdown {
   font-variant-numeric: tabular-nums;
   color: var(--accent);
+  font-weight: 600;
 }
 
-.battles-panel__scores {
-  margin: 0.35rem 0 0;
-  padding-left: 1.1rem;
+.battles-panel__scores-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.15rem 0 0;
+}
+
+.battles-panel__score-chip {
+  flex: 1 1 7.5rem;
+  min-width: 0;
+  padding: 0.28rem 0.45rem;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-elevated, #1e1e26) 92%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.battles-panel__score-chip-val {
   font-size: 0.88rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
   color: var(--text);
-  list-style: disc;
+}
+
+.battles-panel__score-chip-meta {
+  font-size: 0.72rem;
+  line-height: 1.25;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .battles-panel__no-scores {
-  margin: 0.35rem 0 0;
-  font-size: 0.82rem;
+  margin: 0.15rem 0 0;
+  font-size: 0.76rem;
 }
 
 .battles-panel__card-actions {
@@ -6887,27 +7035,134 @@ button.social-tab {
   margin: 0.25rem 0 0;
 }
 
+.battles-panel__versus-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 0.3rem 0.5rem;
+  align-items: start;
+  margin: 0.15rem 0 0;
+}
+
 .battles-panel__fighter {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.06rem;
   min-width: 0;
-  flex: 1 1 8rem;
+}
+
+.battles-panel__versus-strip .battles-panel__fighter:first-child {
+  text-align: left;
+}
+
+.battles-panel__versus-strip .battles-panel__fighter:last-child {
+  text-align: right;
+}
+
+.battles-panel__versus-strip .battles-panel__fighter-sub {
+  text-align: inherit;
+}
+
+.battles-panel__play-targets {
+  margin: 0.25rem 0 0;
+  padding: 0.35rem 0.45rem;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.battles-panel__play-target-intro {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+}
+
+.battles-panel__play-target-line {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.battles-panel__play-target-k {
+  font-weight: 650;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-right: 0.35rem;
+}
+
+.battles-panel__play-target-note {
+  font-weight: 400;
+  opacity: 0.75;
+  font-size: 0.76rem;
+}
+
+.battles-panel__play-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 0.65rem;
+}
+
+@media (max-width: 22rem) {
+  .battles-panel__play-target-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.battles-panel__play-target-cell {
+  min-width: 0;
+  font-size: 0.8rem;
+  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.battles-panel__play-target-cell .battles-panel__play-target-k {
+  display: block;
+  margin-right: 0;
+  margin-bottom: 0.02rem;
+}
+
+.battles-panel__play-target-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 0.85rem;
+  list-style: disc;
+}
+
+.battles-panel__play-target-list li {
+  margin: 0.15rem 0;
+}
+
+.battles-panel__play-target-name {
+  font-weight: 600;
+}
+
+.battles-panel__play-target-missing {
+  opacity: 0.7;
 }
 
 .battles-panel__fighter-name {
   font-weight: 600;
+  font-size: 0.86rem;
+  line-height: 1.25;
 }
 
 .battles-panel__fighter-sub {
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: 0.72rem;
+  line-height: 1.3;
   color: var(--text-muted, #888);
 }
 
 .battles-panel__vs {
   align-self: center;
-  flex: 0 0 auto;
+  padding-top: 0.15rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.85;
 }
 
 .battles-panel__submit-req {
@@ -6974,6 +7229,33 @@ button.social-tab {
   flex-wrap: wrap;
   gap: 0.35rem;
   margin: 0.35rem 0 0;
+}
+
+.battles-panel__action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid color-mix(in srgb, var(--border-strong) 65%, transparent);
+}
+
+.battles-panel__action-bar-start,
+.battles-panel__action-bar-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.battles-panel__action-bar-end {
+  margin-left: auto;
+}
+
+.battles-panel__action-bar-end:empty {
+  display: none;
 }
 
 .battles-panel__detail-body {
@@ -7089,15 +7371,16 @@ button.social-tab {
 .social-list.battles-panel__list li.battles-panel__card--enhanced {
   flex-direction: row;
   align-items: stretch;
-  gap: 0.65rem;
+  gap: 0;
   padding: 0;
   overflow: hidden;
 }
 
 .battles-panel__cover-wrap {
-  flex: 0 0 4.25rem;
-  width: 4.25rem;
-  min-height: 4.25rem;
+  flex: 0 0 5rem;
+  width: 5rem;
+  min-height: 5rem;
+  align-self: stretch;
   background: var(--surface-1, #1a1a22);
   border-right: 1px solid var(--border-strong);
 }
@@ -7105,7 +7388,7 @@ button.social-tab {
 .battles-panel__cover {
   width: 100%;
   height: 100%;
-  min-height: 4.25rem;
+  min-height: 5rem;
   object-fit: cover;
   display: block;
 }
@@ -7115,15 +7398,22 @@ button.social-tab {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.65rem 0.75rem 0.65rem 0;
+  gap: 0.35rem;
+  padding: 0.5rem 0.65rem 0.5rem 0.55rem;
+}
+
+.battles-panel__card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-width: 0;
 }
 
 .battles-panel__window-bar {
   height: 3px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
-  margin-top: 0.35rem;
+  margin-top: 0.15rem;
   overflow: hidden;
 }
 
@@ -7320,20 +7610,24 @@ button.social-tab {
 
 .social-lb-chart-card {
   background: var(--surface-2);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border-strong);
-  padding: 0.65rem 0.75rem;
+  padding: var(--space-4);
   min-width: 0;
+  box-shadow: var(--shadow-inset-quiet);
 }
 
 .social-lb-chart-card .social-h4 {
-  margin: 0 0 0.4rem;
+  margin: 0 0 0.5rem;
   font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .social-lb-chart-inner {
   width: 100%;
   min-height: 200px;
+  margin-top: 0.15rem;
 }
 
 .social-lb-chart-inner--short {
@@ -7616,13 +7910,15 @@ button.social-tab {
   font-size: 0.72rem;
 }
 
-.recharts-wrapper text {
-  fill: var(--muted) !important;
+.recharts-cartesian-axis-tick-value,
+.recharts-polar-angle-axis-tick-value,
+.recharts-legend-item-text {
+  fill: var(--text-secondary) !important;
 }
 
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line {
-  stroke: rgba(255, 255, 255, 0.06) !important;
+  stroke: var(--chart-grid) !important;
 }
 
 .recharts-default-tooltip {
@@ -7630,6 +7926,7 @@ button.social-tab {
   border: 1px solid var(--border-strong) !important;
   border-radius: var(--radius-sm) !important;
   color: var(--text) !important;
+  box-shadow: var(--shadow-floating) !important;
 }
 
 /* —— Empty states —— */
@@ -7908,6 +8205,20 @@ button.social-tab {
   text-overflow: ellipsis;
 }
 
+.battle-map-pick-mapper {
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.92;
+}
+
+.battle-map-pick-list .battle-map-pick-option.is-selected .battle-map-pick-mapper {
+  color: var(--accent-dim);
+}
+
 .battle-map-pick-list .battle-map-pick-option.is-selected .battle-map-pick-title {
   color: var(--accent);
 }
@@ -7988,6 +8299,11 @@ button.social-tab {
 .battle-selected-body .battle-selected-dash {
   color: var(--muted);
   font-weight: 400;
+}
+
+.battle-selected-mapper {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .battle-selected-set {
@@ -8120,6 +8436,21 @@ button.small-btn {
   align-items: center;
   gap: 0.4rem;
   margin-top: var(--space-1);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: var(--space-2) 0;
+  background: var(--sticky-chrome-surface);
+  backdrop-filter: blur(var(--sticky-chrome-blur)) saturate(1.12);
+  -webkit-backdrop-filter: blur(var(--sticky-chrome-blur)) saturate(1.12);
+  box-shadow: 0 1px 0 var(--sticky-chrome-border);
+}
+
+.stats-panel .stats-subnav {
+  margin-left: calc(-1 * var(--panel-pad-inline));
+  margin-right: calc(-1 * var(--panel-pad-inline));
+  padding-left: var(--panel-pad-inline);
+  padding-right: var(--panel-pad-inline);
 }
 
 .stats-subnav-btn {
@@ -8404,8 +8735,17 @@ button.small-btn {
   grid-column: 1 / -1;
 }
 
+.stats-chart-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  box-shadow: var(--shadow-inset-quiet);
+  padding: var(--space-4);
+}
+
 .stats-chart-inner {
   min-height: 200px;
+  margin-top: 0.15rem;
 }
 
 .stats-chart-inner--short {
@@ -8419,6 +8759,8 @@ button.small-btn {
 .stats-chart-card .social-h4 {
   margin-top: 0;
   margin-bottom: 0.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 /* Beatmap set detail modal */
@@ -9130,6 +9472,10 @@ html.overlay-html body {
 .train-pick-item {
   flex: 1;
   min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
   text-align: left;
   padding: var(--space-2);
   border-radius: var(--radius-sm);
@@ -9138,6 +9484,21 @@ html.overlay-html body {
   cursor: pointer;
   font: inherit;
   color: var(--text);
+}
+
+.train-pick-item-line {
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.train-pick-item-mapper {
+  font-size: 0.78rem;
+  line-height: 1.3;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .train-pick-item:hover {
@@ -9322,6 +9683,16 @@ html.overlay-html body {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.4rem;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin-left: calc(-1 * var(--panel-pad-inline));
+  margin-right: calc(-1 * var(--panel-pad-inline));
+  padding: var(--space-2) var(--panel-pad-inline);
+  background: var(--sticky-chrome-surface);
+  backdrop-filter: blur(var(--sticky-chrome-blur)) saturate(1.12);
+  -webkit-backdrop-filter: blur(var(--sticky-chrome-blur)) saturate(1.12);
+  box-shadow: 0 1px 0 var(--sticky-chrome-border);
 }
 
 .achievement-filter-btn {

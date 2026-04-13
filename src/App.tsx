@@ -66,7 +66,13 @@ import { useSearchDownloadState } from "./useSearchDownloadState";
 import { useGlobalHotkeys } from "./useGlobalHotkeys";
 import { DownloadLogsPanel } from "./DownloadLogsPanel";
 import { SettingsPanel } from "./SettingsPanel";
-import { DOWNLOAD_LOG_MAX, newDownloadLogId, type DownloadLogEntry } from "./downloadLog";
+import {
+  DOWNLOAD_LOG_MAX,
+  loadDownloadLogs,
+  newDownloadLogId,
+  saveDownloadLogs,
+  type DownloadLogEntry,
+} from "./downloadLog";
 import packageJson from "../package.json";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { applyUpdateAndRelaunch, check, checkForUpdatesAndInstall, updaterAvailable } from "./autoUpdate";
@@ -424,7 +430,7 @@ export default function App() {
   const [appVersion, setAppVersion] = useState<string>("—");
   const [updateBusy, setUpdateBusy] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
-  const [downloadLogs, setDownloadLogs] = useState<DownloadLogEntry[]>([]);
+  const [downloadLogs, setDownloadLogs] = useState<DownloadLogEntry[]>(loadDownloadLogs);
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useState(loadDesktopNotificationsEnabled);
   const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
   const localLibraryRef = useRef<Set<number>>(new Set());
@@ -614,6 +620,10 @@ export default function App() {
   const clearDownloadLogs = useCallback(() => {
     setDownloadLogs([]);
   }, []);
+
+  useEffect(() => {
+    saveDownloadLogs(downloadLogs);
+  }, [downloadLogs]);
 
   const handleCheckForUpdates = useCallback(async () => {
     setUpdateBusy(true);
@@ -1693,15 +1703,16 @@ export default function App() {
             </div>
         {tab === "social" && (
           <SocialPanel
-            onToast={(tone, message) => pushToast(tone, message)}
+            onToast={pushToast}
             resolvedSocialApiBaseUrl={resolveSocialApiBaseUrl(settings.partyServerUrl, settings.socialApiBaseUrl)}
             socialApiIsOverride={Boolean(settings.socialApiBaseUrl?.trim())}
+            discordControlSessionToken={settings.discordControlSessionToken}
           />
         )}
 
         {tab === "stats" && (
           <PersonalStatsPanel
-            onToast={(tone, message) => pushToast(tone, message)}
+            onToast={pushToast}
             onGoToTrain={() => setTab("train")}
           />
         )}
