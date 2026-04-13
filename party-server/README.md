@@ -133,9 +133,9 @@ Health checks inside the container use `http://127.0.0.1:4681/health` (see `Dock
 
 With TLS, Caddy proxies **`/api/*`**, **`/health*`**, **`/control*`**, etc. to **`PORT + 1`** (HTTP), and everything else—including **`/`**—to **`PORT`** (lobby WebSocket only). A normal browser request to **`/`** then gets **426 Upgrade Required**. osu-link itself calls **`/api/v1/*`** and **`/health`**; it does not need the homepage.
 
-**New installs:** current **`install-pi.sh`** inserts **`@rootNotWs`** + **`redir @rootNotWs /health 308`** before the final **`reverse_proxy`** to **`PARTY_PORT`**.
+**New installs:** current **`install-pi.sh`** adds a **site-level** **`@rootPlain`** + **`handle @rootPlain { redir * /health 308 }`** immediately under **`${PUBLIC_DOMAIN} {`**, **before** **`route {`**, so plain **`GET /`** never reaches the lobby WebSocket proxy.
 
-**Already deployed:** From the repo on the Pi, run **`./update-server.sh`** (runs **`install-pi.sh`** with **`SETUP_CADDY=1`**) or **`sudo SETUP_CADDY=1 ./party-server/install-pi.sh`**. If **`PUBLIC_DOMAIN`** is already in **`/etc/caddy/Caddyfile`** but **`@rootNotWs`** is missing, **`install-pi.sh`** patches the file in place (after **`caddy validate`**), keeps a timestamped **`.bak.osu-link-*`** backup, then restarts Caddy. If the patch cannot find a catch‑all **`reverse_proxy 127.0.0.1:${PARTY_PORT}`** line, it prints a warning — merge the snippet by hand (same as **New installs**), then:
+**Already deployed:** From the repo on the Pi, run **`./update-server.sh`** or **`sudo SETUP_CADDY=1 ./party-server/install-pi.sh`**. If **`PUBLIC_DOMAIN`** is in **`/etc/caddy/Caddyfile`** but **`@rootPlain`** is missing, **`install-pi.sh`** inserts that block after the site opening line (after **`caddy validate`**), writes a **`.bak.osu-link-*`** backup, then restarts Caddy. If the patch cannot find a line matching **`${PUBLIC_DOMAIN} {`**, it prints a warning — add the same **`@rootPlain` / `handle`** block by hand under the site block, then:
 
 ```bash
 sudo caddy validate --config /etc/caddy/Caddyfile

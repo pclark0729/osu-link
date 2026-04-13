@@ -337,47 +337,52 @@ if [[ "${SETUP_CADDY}" == "1" ]]; then
 # --- osu-link party server (install-pi.sh) ---
 # Party lobby WS: ${PARTY_PORT}. HTTP+Discord control WS: $((PARTY_PORT + 1)) (/api/v1, /health, /control).
 ${PUBLIC_DOMAIN} {
+	# Plain GET / (browser) must not hit PARTY_PORT (WS only) -> 426. Handle here before route{}.
+	@rootPlain {
+		path /
+		not header Upgrade websocket
+	}
+	handle @rootPlain {
+		redir * /health 308
+	}
 	route {
 		reverse_proxy /control* 127.0.0.1:$((PARTY_PORT + 1))
 		reverse_proxy /api/* 127.0.0.1:$((PARTY_PORT + 1))
 		reverse_proxy /internal/* 127.0.0.1:$((PARTY_PORT + 1))
 		reverse_proxy /health* 127.0.0.1:$((PARTY_PORT + 1))
 		reverse_proxy /ready* 127.0.0.1:$((PARTY_PORT + 1))
-		# Plain GET / (browser) was hitting PARTY_PORT (WS only) → 426 Upgrade Required.
-		@rootNotWs {
-			path /
-			not header Upgrade websocket
-		}
-		redir @rootNotWs /health 308
 		reverse_proxy 127.0.0.1:${PARTY_PORT}
 	}
 }
 EOF
   fi
 
-  # Older Caddyfiles: site block exists but no GET / → /health redirect (browsers hit WS port → 426).
-  if [[ -f "${CADDY_MAIN}" ]] && grep -qF "${PUBLIC_DOMAIN}" "${CADDY_MAIN}" 2>/dev/null && ! grep -qF "@rootNotWs" "${CADDY_MAIN}" 2>/dev/null; then
-    echo "==> Patching ${CADDY_MAIN}: redirect plain GET / to /health (avoid 426 Upgrade Required)"
+  # Older Caddyfiles: redirect must run *before* route{} (not only before catch-all reverse_proxy).
+  if [[ -f "${CADDY_MAIN}" ]] && grep -qF "${PUBLIC_DOMAIN}" "${CADDY_MAIN}" 2>/dev/null && ! grep -qF "@rootPlain" "${CADDY_MAIN}" 2>/dev/null; then
+    echo "==> Patching ${CADDY_MAIN}: site-level GET / -> /health (avoid 426 Upgrade Required)"
     TMP="${CADDY_MAIN}.osu-link-patch.$$"
+    PUB_REGEX=$(printf '%s\n' "${PUBLIC_DOMAIN}" | sed 's/\./\\./g')
     set +e
-    awk -v party_port="${PARTY_PORT}" '
+    awk -v re="${PUB_REGEX}" '
 BEGIN { inserted = 0 }
-function insert_block() {
-  print "\t\t# Plain GET / (browser) was hitting WS port only -> 426 Upgrade Required (install-pi.sh)."
-  print "\t\t@rootNotWs {"
-  print "\t\t\tpath /"
-  print "\t\t\tnot header Upgrade websocket"
-  print "\t\t}"
-  print "\t\tredir @rootNotWs /health 308"
+function insert_site_handle() {
+  print "\t# Plain GET / (browser) must not hit WS port -> 426. install-pi.sh"
+  print "\t@rootPlain {"
+  print "\t\tpath /"
+  print "\t\tnot header Upgrade websocket"
+  print "\t}"
+  print "\thandle @rootPlain {"
+  print "\t\tredir * /health 308"
+  print "\t}"
 }
 {
   line = $0
   sub(/\r$/, "", line)
-  if (inserted == 0 && line ~ "^[[:space:]]*reverse_proxy[[:space:]]+127\\.0\\.0\\.1:" party_port "[[:space:]]*$") {
-    insert_block()
+  print $0
+  if (inserted == 0 && line ~ ("^[[:space:]]*" re "[[:space:]]*\\{")) {
+    insert_site_handle()
     inserted = 1
   }
-  print $0
 }
 END {
   if (inserted == 0) exit 2
@@ -387,7 +392,7 @@ END {
     set -e
     if [[ "${AWK_EXIT}" -eq 2 ]]; then
       rm -f "${TMP}"
-      echo "    WARN: No catch-all reverse_proxy 127.0.0.1:${PARTY_PORT} line found — add @rootNotWs manually (see README)."
+      echo "    WARN: Could not find site line \"${PUBLIC_DOMAIN} {\" — add @rootPlain/handle manually (see README)."
     elif [[ "${AWK_EXIT}" -ne 0 ]]; then
       rm -f "${TMP}"
       echo "    WARN: Caddyfile patch awk failed (exit ${AWK_EXIT})."
