@@ -34,7 +34,23 @@ echo "==> git fetch ${REMOTE}"
 git fetch "${REMOTE}"
 
 echo "==> git pull --ff-only ${REMOTE} ${BRANCH}"
-git pull --ff-only "${REMOTE}" "${BRANCH}"
+if ! git pull --ff-only "${REMOTE}" "${BRANCH}"; then
+  if [[ -z "$(git status --porcelain 2>/dev/null)" ]]; then
+    echo "git pull failed and the working tree is clean (diverged branch, network, etc.). Fix manually and retry." >&2
+    exit 1
+  fi
+  echo "==> pull blocked by local changes; stashing and retrying (see: git stash list)"
+  STASH_MSG="update-server.sh auto-stash $(date -Iseconds 2>/dev/null || date)"
+  if ! git stash push -u -m "${STASH_MSG}"; then
+    echo "git stash failed. Check git status and resolve, then re-run this script." >&2
+    exit 1
+  fi
+  if ! git pull --ff-only "${REMOTE}" "${BRANCH}"; then
+    echo "git pull still failed after stash. Try: git stash pop  then inspect (branch may need reset/rebase)." >&2
+    exit 1
+  fi
+  echo "    Stashed pre-update edits. Restore if needed: git stash pop"
+fi
 
 chmod +x "${INSTALL}" 2>/dev/null || true
 
