@@ -299,7 +299,7 @@ fn social_api_http_error(status: reqwest::StatusCode, text: String) -> String {
     let mut s = format!("social API {status}: {text}");
     if status.as_u16() == 426 {
         s.push_str(
-            " — REST uses port 4681 (4680 is WebSocket only). Set Social API base to http://…:4681.",
+            " — Hitting the WebSocket port with HTTP. Use https://… (or http://LAN:4681), not wss:// or :4680. If you use Caddy on a domain, use https://your.domain with no port.",
         );
     }
     s

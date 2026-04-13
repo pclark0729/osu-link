@@ -213,9 +213,27 @@ fn strip_mistaken_https_4681_for_caddy_public_hosts(base: &str) -> String {
     format!("https://{host}{tail}")
 }
 
+/// Users sometimes paste **Party** WebSocket URLs into the Social API field (`wss://…:4680`). Plain
+/// `:4680`→`:4681` would yield `wss://…:4681`, which is still not a valid HTTP base — reqwest may hit the
+/// wrong port and get **426**. Convert `ws://` / `wss://` to `http://` / `https://` first (same rules as Party URL).
+fn coerce_ws_paste_to_http_rest_base(input: &str) -> String {
+    let t = input.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower.starts_with("wss://") {
+        let rest = &t[6..];
+        return party_ws_to_http_base(&format!("wss://{rest}")).unwrap_or_else(|| format!("https://{rest}"));
+    }
+    if lower.starts_with("ws://") {
+        let rest = &t[5..];
+        return party_ws_to_http_base(&format!("ws://{rest}")).unwrap_or_else(|| format!("http://{rest}"));
+    }
+    t.to_string()
+}
+
 /// Full normalization for outbound Social REST (`/api/v1/*`).
 pub(crate) fn normalize_social_api_rest_base(base: &str) -> String {
-    let step = normalize_social_api_http_base_party_port(base);
+    let coerced = coerce_ws_paste_to_http_rest_base(base);
+    let step = normalize_social_api_http_base_party_port(&coerced);
     strip_mistaken_https_4681_for_caddy_public_hosts(&step)
 }
 
@@ -323,6 +341,14 @@ mod control_ws_url_tests {
         assert_eq!(
             normalize_social_api_rest_base("https://192.168.1.10:4681"),
             "https://192.168.1.10:4681"
+        );
+    }
+
+    #[test]
+    fn wss_paste_in_social_field_becomes_https() {
+        assert_eq!(
+            normalize_social_api_rest_base("wss://osulink.peyton-clark.com:4680"),
+            "https://osulink.peyton-clark.com"
         );
     }
 

@@ -324,11 +324,11 @@ export function SettingsPanel({
             </label>
           )}
           <label className="field field--stack">
-            <span>Social API base URL</span>
+            <span>Social API base URL (HTTP only — use https://…, not wss://)</span>
             <input
               type="text"
               autoComplete="off"
-              placeholder="https://host:4681"
+              placeholder="https://your.domain"
               value={settings.socialApiBaseUrl ?? ""}
               onChange={(e) =>
                 setSettings({

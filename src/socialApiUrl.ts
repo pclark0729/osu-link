@@ -49,9 +49,25 @@ function stripHttpsMistaken4681ForCaddyPublicHosts(base: string): string {
   return `https://${host}${tail}`;
 }
 
+function coerceWsPasteToHttpRestBase(input: string): string {
+  const t = input.trim();
+  const lower = t.toLowerCase();
+  if (lower.startsWith("wss://")) {
+    const rest = t.slice(6);
+    return partyWsToHttpBase(`wss://${rest}`) ?? `https://${rest}`;
+  }
+  if (lower.startsWith("ws://")) {
+    const rest = t.slice(5);
+    return partyWsToHttpBase(`ws://${rest}`) ?? `http://${rest}`;
+  }
+  return t;
+}
+
 /** Full REST base normalization (matches desktop `social_api_*`). */
 export function normalizeSocialApiRestBase(base: string): string {
-  return stripHttpsMistaken4681ForCaddyPublicHosts(normalizeSocialApiHttpBasePartyPort(base));
+  return stripHttpsMistaken4681ForCaddyPublicHosts(
+    normalizeSocialApiHttpBasePartyPort(coerceWsPasteToHttpRestBase(base)),
+  );
 }
 
 export function partyWsToHttpBase(ws: string): string | null {
