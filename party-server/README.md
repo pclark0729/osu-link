@@ -127,6 +127,22 @@ Health checks inside the container use `http://127.0.0.1:4681/health` (see `Dock
 | Clients cannot connect remotely | Set `HOST=0.0.0.0`, open firewall + port forward `PORT`, use `ws://` or `wss://` via a TLS proxy. |
 | Empty `/health` or connection refused | Server not running, or `HEALTH_PORT=0`. Confirm with `LOG_LEVEL=debug`. |
 | Lobbies empty in `/health` but clients “in lobby” | Normal if you restarted the server; state is in-memory only. |
+| **`426 Upgrade Required`** at **`https://your-domain/`** | Caddy’s catch-all was sending plain **`GET /`** to the **WebSocket** port. New **`install-pi.sh`** redirects non-WebSocket **`/`** to **`/health`**. See [Caddy: 426 on site root](#caddy-426-on-site-root) if you installed before that change. |
+
+## Caddy: 426 on site root
+
+With TLS, Caddy proxies **`/api/*`**, **`/health*`**, **`/control*`**, etc. to **`PORT + 1`** (HTTP), and everything else—including **`/`**—to **`PORT`** (lobby WebSocket only). A normal browser request to **`/`** then gets **426 Upgrade Required**. osu-link itself calls **`/api/v1/*`** and **`/health`**; it does not need the homepage.
+
+**New installs:** current **`install-pi.sh`** inserts **`@rootNotWs`** + **`redir @rootNotWs /health 308`** before the final **`reverse_proxy`** to **`PARTY_PORT`**.
+
+**Already deployed:** merge that same snippet into **`/etc/caddy/Caddyfile`** inside your **`${PUBLIC_DOMAIN} { route { … } }`** block (copy from **`install-pi.sh`**), then:
+
+```bash
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+Verify with **`https://your-domain/health`** (JSON), not necessarily **`/`**.
 
 ## Raspberry Pi install script
 

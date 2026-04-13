@@ -343,6 +343,12 @@ ${PUBLIC_DOMAIN} {
 		reverse_proxy /internal/* 127.0.0.1:$((PARTY_PORT + 1))
 		reverse_proxy /health* 127.0.0.1:$((PARTY_PORT + 1))
 		reverse_proxy /ready* 127.0.0.1:$((PARTY_PORT + 1))
+		# Plain GET / (browser) was hitting PARTY_PORT (WS only) → 426 Upgrade Required.
+		@rootNotWs {
+			path /
+			not header Upgrade websocket
+		}
+		redir @rootNotWs /health 308
 		reverse_proxy 127.0.0.1:${PARTY_PORT}
 	}
 }
