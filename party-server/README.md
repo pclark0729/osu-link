@@ -135,14 +135,14 @@ With TLS, Caddy proxies **`/api/*`**, **`/health*`**, **`/control*`**, etc. to *
 
 **New installs:** current **`install-pi.sh`** inserts **`@rootNotWs`** + **`redir @rootNotWs /health 308`** before the final **`reverse_proxy`** to **`PARTY_PORT`**.
 
-**Already deployed:** merge that same snippet into **`/etc/caddy/Caddyfile`** inside your **`${PUBLIC_DOMAIN} { route { … } }`** block (copy from **`install-pi.sh`**), then:
+**Already deployed:** From the repo on the Pi, run **`./update-server.sh`** (runs **`install-pi.sh`** with **`SETUP_CADDY=1`**) or **`sudo SETUP_CADDY=1 ./party-server/install-pi.sh`**. If **`PUBLIC_DOMAIN`** is already in **`/etc/caddy/Caddyfile`** but **`@rootNotWs`** is missing, **`install-pi.sh`** patches the file in place (after **`caddy validate`**), keeps a timestamped **`.bak.osu-link-*`** backup, then restarts Caddy. If the patch cannot find a catch‑all **`reverse_proxy 127.0.0.1:${PARTY_PORT}`** line, it prints a warning — merge the snippet by hand (same as **New installs**), then:
 
 ```bash
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-Verify with **`https://your-domain/health`** (JSON), not necessarily **`/`**.
+Verify with **`https://your-domain/health`** (JSON), then **`https://your-domain/`** (should redirect to **`/health`**).
 
 ## Raspberry Pi install script
 

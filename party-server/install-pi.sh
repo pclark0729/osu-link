@@ -355,6 +355,54 @@ ${PUBLIC_DOMAIN} {
 EOF
   fi
 
+  # Older Caddyfiles: site block exists but no GET / → /health redirect (browsers hit WS port → 426).
+  if [[ -f "${CADDY_MAIN}" ]] && grep -qF "${PUBLIC_DOMAIN}" "${CADDY_MAIN}" 2>/dev/null && ! grep -qF "@rootNotWs" "${CADDY_MAIN}" 2>/dev/null; then
+    echo "==> Patching ${CADDY_MAIN}: redirect plain GET / to /health (avoid 426 Upgrade Required)"
+    TMP="${CADDY_MAIN}.osu-link-patch.$$"
+    set +e
+    awk -v party_port="${PARTY_PORT}" '
+BEGIN { inserted = 0 }
+function insert_block() {
+  print "\t\t# Plain GET / (browser) was hitting WS port only -> 426 Upgrade Required (install-pi.sh)."
+  print "\t\t@rootNotWs {"
+  print "\t\t\tpath /"
+  print "\t\t\tnot header Upgrade websocket"
+  print "\t\t}"
+  print "\t\tredir @rootNotWs /health 308"
+}
+{
+  line = $0
+  sub(/\r$/, "", line)
+  if (inserted == 0 && line ~ "^[[:space:]]*reverse_proxy[[:space:]]+127\\.0\\.0\\.1:" party_port "[[:space:]]*$") {
+    insert_block()
+    inserted = 1
+  }
+  print $0
+}
+END {
+  if (inserted == 0) exit 2
+}
+' "${CADDY_MAIN}" >"${TMP}"
+    AWK_EXIT=$?
+    set -e
+    if [[ "${AWK_EXIT}" -eq 2 ]]; then
+      rm -f "${TMP}"
+      echo "    WARN: No catch-all reverse_proxy 127.0.0.1:${PARTY_PORT} line found — add @rootNotWs manually (see README)."
+    elif [[ "${AWK_EXIT}" -ne 0 ]]; then
+      rm -f "${TMP}"
+      echo "    WARN: Caddyfile patch awk failed (exit ${AWK_EXIT})."
+    elif caddy validate --config "${TMP}" &>/dev/null; then
+      BACKUP="${CADDY_MAIN}.bak.osu-link-$(date +%Y%m%d%H%M%S)"
+      cp -a "${CADDY_MAIN}" "${BACKUP}"
+      mv "${TMP}" "${CADDY_MAIN}"
+      echo "    Patched OK. Backup: ${BACKUP}"
+    else
+      echo "    WARN: caddy validate failed — not replacing ${CADDY_MAIN}. Output:"
+      caddy validate --config "${TMP}" 2>&1 | sed 's/^/    /' || true
+      rm -f "${TMP}"
+    fi
+  fi
+
   systemctl enable caddy
   systemctl restart caddy
   sleep 1
