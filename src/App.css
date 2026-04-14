@@ -2313,6 +2313,12 @@ button.danger:disabled {
   margin-top: 0.75rem;
 }
 
+.rescan-progress {
+  width: 130px;
+  height: 10px;
+  accent-color: var(--accent);
+}
+
 .hint {
   font-size: var(--text-caption);
   color: var(--muted);
@@ -4601,6 +4607,29 @@ button.onboarding-copy {
 .inline-code {
   font-size: 0.8rem;
   color: var(--accent);
+}
+
+.link-button {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.link-button:hover {
+  color: color-mix(in srgb, var(--accent) 86%, white);
+}
+
+.link-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, white);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 
 .onboarding-actions {

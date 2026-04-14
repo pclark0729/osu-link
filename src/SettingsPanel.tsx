@@ -54,6 +54,8 @@ export function SettingsPanel({
   resolvedSongs,
   localBeatmapsetCount,
   refreshPaths,
+  rescanBusy,
+  rescanProgress,
   discordPairingCode,
   copyDiscordPairingCode,
   discordPairingBusy,
@@ -79,6 +81,8 @@ export function SettingsPanel({
   resolvedSongs: string;
   localBeatmapsetCount: number;
   refreshPaths: () => void | Promise<void>;
+  rescanBusy: boolean;
+  rescanProgress?: number | null;
   discordPairingCode: string | null;
   copyDiscordPairingCode: () => void | Promise<void>;
   discordPairingBusy: boolean;
@@ -476,9 +480,22 @@ export function SettingsPanel({
             <p className="hint u-mb-0">If a folder is missing required files, osu-link will try to re-download it.</p>
           </div>
           <div className="row-actions">
-            <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void refreshPaths()}>
+            <button
+              type="button"
+              className="secondary"
+              disabled={!isTauri() || rescanBusy}
+              aria-busy={rescanBusy}
+              onClick={() => void refreshPaths()}
+            >
               Rescan Songs
             </button>
+            {rescanBusy && (
+              <progress
+                className="rescan-progress"
+                value={typeof rescanProgress === "number" ? Math.round(rescanProgress * 100) : undefined}
+                max={100}
+              />
+            )}
           </div>
           <p className="hint u-mb-0" title="After changing OAuth scopes, sign in again. Social features need party HTTP reachable.">
             Re-login after scope changes.

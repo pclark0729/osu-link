@@ -213,8 +213,8 @@ fn get_local_beatmapset_ids() -> Result<Vec<i64>, String> {
 }
 
 #[tauri::command]
-async fn repair_broken_beatmaps() -> Result<repair::RepairSummary, String> {
-    repair::repair_broken_beatmaps().await
+async fn repair_broken_beatmaps(app: tauri::AppHandle) -> Result<repair::RepairSummary, String> {
+    repair::repair_broken_beatmaps(&app).await
 }
 
 pub(crate) async fn download_and_import_impl(set_id: i64, no_video: bool) -> Result<String, String> {

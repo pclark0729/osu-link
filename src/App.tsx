@@ -444,6 +444,8 @@ export default function App() {
   const [downloadLogs, setDownloadLogs] = useState<DownloadLogEntry[]>(loadDownloadLogs);
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useState(loadDesktopNotificationsEnabled);
   const [localBeatmapsetIds, setLocalBeatmapsetIds] = useState<Set<number>>(() => new Set());
+  const [rescanBusy, setRescanBusy] = useState(false);
+  const [rescanProgress, setRescanProgress] = useState<number | null>(null);
   const localLibraryRef = useRef<Set<number>>(new Set());
   const importFileRef = useRef<HTMLInputElement>(null);
   const [partyState, setPartyState] = useState<PartyClientState>(() =>
@@ -774,6 +776,29 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    void listen<{ stage?: string; current?: number; total?: number }>("repair-progress", (e) => {
+      const { stage, current, total } = e.payload ?? {};
+      if (!stage || typeof current !== "number" || typeof total !== "number") return;
+      if (stage === "done") {
+        setRescanProgress(1);
+        return;
+      }
+      const frac = Math.max(0, Math.min(1, current / Math.max(1, total)));
+      // Weighted: scan is 35%, repair is 65%.
+      const base = stage === "scan" ? 0 : 0.35;
+      const w = stage === "scan" ? 0.35 : 0.65;
+      setRescanProgress(base + frac * w);
+    }).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   const activeCollection = getActiveCollection(collectionStore);
   const activeItems = activeCollection?.items ?? [];
 
@@ -799,31 +824,54 @@ export default function App() {
   }, []);
 
   const refreshPaths = useCallback(async () => {
+    setRescanBusy(true);
+    setRescanProgress(null);
     try {
-      const p = await invoke<string>("get_beatmap_dir");
-      setResolvedSongs(p);
-    } catch {
-      setResolvedSongs("");
-    }
-    if (isTauri() && settings.autoRepairBrokenBeatmapsOnRescan) {
       try {
-        const r = await invoke<{
-          scanned: number;
-          broken: number;
-          repaired: number;
-          skipped: number;
-          failures: Array<{ folder: string; reason: string; beatmapsetId?: number | null }>;
-        }>("repair_broken_beatmaps");
-        if (r.broken > 0) {
-          const msg = `Repair: ${r.repaired}/${r.broken} fixed` + (r.failures?.length ? ` · ${r.failures.length} failed` : "");
-          pushToast(r.failures?.length ? "error" : "success", msg);
-        }
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        pushToast("error", `Repair failed: ${message}`);
+        const p = await invoke<string>("get_beatmap_dir");
+        setResolvedSongs(p);
+      } catch {
+        setResolvedSongs("");
       }
+      if (isTauri() && settings.autoRepairBrokenBeatmapsOnRescan) {
+        try {
+          const r = await invoke<{
+            scanned: number;
+            broken: number;
+            repaired: number;
+            skipped: number;
+            deletedUnrepairable: number;
+            deletedBrokenDuplicates: number;
+            failures: Array<{ folder: string; reason: string; beatmapsetId?: number | null }>;
+          }>("repair_broken_beatmaps");
+          if (r.broken > 0) {
+            const noId = (r.failures ?? []).filter((f) => !f.beatmapsetId).length;
+            const withId = (r.failures ?? []).length - noId;
+            const base =
+              `Repair: ${r.repaired}/${r.broken} fixed` +
+              (r.skipped ? ` · ${r.skipped} skipped` : "") +
+              (r.failures?.length ? ` · ${r.failures.length} failed` : "") +
+              (r.failures?.length ? ` (${noId} no id, ${withId} repair failed)` : "") +
+              (r.deletedUnrepairable || r.deletedBrokenDuplicates
+                ? ` · ${(r.deletedUnrepairable ?? 0) + (r.deletedBrokenDuplicates ?? 0)} deleted`
+                : "");
+            const first = r.failures?.find((f) => f.beatmapsetId) ?? r.failures?.[0];
+            const detail =
+              first?.reason?.trim()
+                ? ` · First failure: ${first.folder}: ${first.reason}`.slice(0, 240)
+                : "";
+            pushToast(r.failures?.length ? "error" : "success", base + detail);
+          }
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          pushToast("error", `Repair failed: ${message}`);
+        }
+      }
+      await reloadLocalLibrary();
+    } finally {
+      setRescanProgress(1);
+      setRescanBusy(false);
     }
-    await reloadLocalLibrary();
   }, [reloadLocalLibrary, settings.autoRepairBrokenBeatmapsOnRescan, pushToast]);
 
   const refreshEffectiveSocialApiBase = useCallback(async () => {
@@ -1864,6 +1912,8 @@ export default function App() {
             resolvedSongs={resolvedSongs}
             localBeatmapsetCount={localBeatmapsetIds.size}
             refreshPaths={refreshPaths}
+            rescanBusy={rescanBusy}
+            rescanProgress={rescanProgress}
             discordPairingCode={discordPairingCode}
             copyDiscordPairingCode={copyDiscordPairingCode}
             discordPairingBusy={discordPairingBusy}

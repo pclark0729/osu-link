@@ -48,10 +48,15 @@ export const OAUTH_REDIRECT_URI = "http://127.0.0.1:42813/callback";
 
 /**
  * OAuth apps are created from account settings (osu-web); the old `/home/account/oauth/new` path 404s.
- * `#new-oauth-application` matches the register button id in osu-web (`own-clients.tsx`).
+ *
+ * Note: some environments/users have reported the `#new-oauth-application` fragment landing on a 404.
+ * Linking to the OAuth section is more robust; users can click “New OAuth Application” on that page.
  */
 export const OSU_OAUTH_NEW_APP_URL =
-  "https://osu.ppy.sh/home/account/edit#new-oauth-application";
+  "https://osu.ppy.sh/home/account/edit#oauth";
 
 /** Same page — scrolls to the OAuth section listing your apps. */
 export const OSU_OAUTH_LIST_URL = "https://osu.ppy.sh/home/account/edit#oauth";
+
+/** Reliable entry point when the user is logged out. */
+export const OSU_SIGN_IN_URL = "https://osu.ppy.sh/";

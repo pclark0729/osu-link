@@ -12,14 +12,31 @@ const API: &str = "https://osu.ppy.sh/api/v2";
 /// Order: try catboy (Mino) first, then Sayobot CDN — some sets are incomplete on one mirror.
 pub fn mirror_download_urls(set_id: i64, no_video: bool) -> Vec<String> {
     let nv = if no_video { "1" } else { "0" };
-    vec![
+    let mut v = vec![
         format!("https://catboy.best/d/{set_id}?nv={nv}"),
         if no_video {
             format!("https://txy1.sayobot.cn/beatmaps/download/novideo/{set_id}")
         } else {
             format!("https://txy1.sayobot.cn/beatmaps/download/full/{set_id}")
         },
-    ]
+    ];
+
+    // Additional community mirrors (best-effort fallbacks).
+    // These endpoints are not guaranteed stable; keep them late in the list so
+    // we try our preferred mirrors first.
+    if no_video {
+        v.push(format!("https://api.chimu.moe/v1/download/{set_id}?n=1"));
+    }
+    v.push(format!("https://api.chimu.moe/v1/download/{set_id}"));
+
+    // osu.direct commonly exposes a simple `/d/{id}` download route.
+    // Keep both forms because parameter support can vary.
+    if no_video {
+        v.push(format!("https://osu.direct/d/{set_id}?nv=1"));
+    }
+    v.push(format!("https://osu.direct/d/{set_id}"));
+
+    v
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -334,6 +351,8 @@ pub async fn api_user_scores(
 pub async fn download_bytes_from_url(url: &str) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(20))
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(90))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -355,7 +374,8 @@ pub async fn download_bytes_from_url(url: &str) -> Result<Vec<u8>, String> {
         let status = res.status();
         if !status.is_success() {
             let t = res.text().await.unwrap_or_default();
-            return Err(format!("download failed {status}: {t}"));
+            let head = t.trim().chars().take(240).collect::<String>();
+            return Err(format!("download failed {status}: {head}"));
         }
 
         return res.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string());

@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,7 +21,19 @@ pub struct RepairSummary {
     pub broken: u32,
     pub repaired: u32,
     pub skipped: u32,
+    /// Broken folders without a detectable BeatmapSetID that were deleted.
+    pub deleted_unrepairable: u32,
+    /// Broken folders for sets that already had a valid folder, deleted as duplicates.
+    pub deleted_broken_duplicates: u32,
     pub failures: Vec<RepairFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairProgress {
+    pub stage: String,
+    pub current: u32,
+    pub total: u32,
 }
 
 fn now_ms() -> u128 {
@@ -204,7 +217,7 @@ async fn repair_set_id(songs_dir: &Path, set_id: i64) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn repair_broken_beatmaps() -> Result<RepairSummary, String> {
+pub async fn repair_broken_beatmaps(app: &tauri::AppHandle) -> Result<RepairSummary, String> {
     let s = load_settings();
     let songs_dir = paths::resolve_beatmap_directory(s.beatmap_directory.as_deref())?;
     if !songs_dir.is_dir() {
@@ -216,7 +229,16 @@ pub async fn repair_broken_beatmaps() -> Result<RepairSummary, String> {
     summary.scanned = children.len() as u32;
 
     let mut broken: Vec<(String, PathBuf, Option<i64>, String)> = Vec::new();
-    for (name, path) in children {
+    let total_scan = summary.scanned.max(1);
+    for (i, (name, path)) in children.into_iter().enumerate() {
+        let _ = app.emit(
+            "repair-progress",
+            RepairProgress {
+                stage: "scan".into(),
+                current: (i as u32).saturating_add(1),
+                total: total_scan,
+            },
+        );
         match validate_folder_strict(&path) {
             Ok(()) => {}
             Err(reason) => {
@@ -229,17 +251,13 @@ pub async fn repair_broken_beatmaps() -> Result<RepairSummary, String> {
 
     // Deduplicate by set id; we repair per-set, not per-folder.
     let mut by_id: HashMap<i64, Vec<(String, PathBuf, String)>> = HashMap::new();
-    let mut unrepairable: Vec<RepairFailure> = Vec::new();
+    let mut unrepairable_to_delete: Vec<(String, PathBuf, String)> = Vec::new();
     for (name, path, id, reason) in broken {
         match id {
             Some(set_id) if set_id > 0 => {
                 by_id.entry(set_id).or_default().push((name, path, reason));
             }
-            _ => unrepairable.push(RepairFailure {
-                folder: name,
-                reason: format!("unrepairable: {reason} (no BeatmapSetID found)"),
-                beatmapset_id: None,
-            }),
+            _ => unrepairable_to_delete.push((name, path, reason)),
         }
     }
 
@@ -248,9 +266,32 @@ pub async fn repair_broken_beatmaps() -> Result<RepairSummary, String> {
     ids.sort_unstable();
 
     let mut repaired_ids: HashSet<i64> = HashSet::new();
-    for set_id in ids {
+    let total_repair = ids.len().max(1) as u32;
+    for (idx, set_id) in ids.into_iter().enumerate() {
+        let _ = app.emit(
+            "repair-progress",
+            RepairProgress {
+                stage: "repair".into(),
+                current: (idx as u32).saturating_add(1),
+                total: total_repair,
+            },
+        );
         let before_had_valid = has_any_valid_folder_for_set(&songs_dir, set_id);
         if before_had_valid {
+            // If there's already a valid folder for this set id, we don't need to re-download.
+            // But we *do* want to clean up any broken duplicates for that id.
+            match remove_broken_folders_for_set(&songs_dir, set_id) {
+                Ok(removed) => {
+                    summary.deleted_broken_duplicates += removed.len() as u32;
+                }
+                Err(e) => {
+                    summary.failures.push(RepairFailure {
+                        folder: format!("{set_id}"),
+                        reason: format!("cleanup broken duplicates failed: {e}"),
+                        beatmapset_id: Some(set_id),
+                    });
+                }
+            }
             summary.skipped += 1;
             continue;
         }
@@ -280,8 +321,26 @@ pub async fn repair_broken_beatmaps() -> Result<RepairSummary, String> {
         }
     }
 
-    // Any folders with unknown ID are failures (reported).
-    summary.failures.extend(unrepairable);
+    // Delete broken folders with no detectable BeatmapSetID (unrepairable).
+    for (name, path, reason) in unrepairable_to_delete {
+        match fs::remove_dir_all(&path) {
+            Ok(()) => summary.deleted_unrepairable += 1,
+            Err(e) => summary.failures.push(RepairFailure {
+                folder: name,
+                reason: format!("unrepairable: {reason} (no BeatmapSetID found) — delete failed: {e}"),
+                beatmapset_id: None,
+            }),
+        }
+    }
+
+    let _ = app.emit(
+        "repair-progress",
+        RepairProgress {
+            stage: "done".into(),
+            current: 1,
+            total: 1,
+        },
+    );
     Ok(summary)
 }
 
