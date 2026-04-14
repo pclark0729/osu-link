@@ -265,8 +265,10 @@ export function pickBestChallengePlay(
 /**
  * For a beatmap set’s difficulties (osu! API `beatmaps` array), pick the ranked osu! difficulty whose ★ rating is
  * closest to the player’s assigned tier ({@link medianStarsFromBestScores}), preferring maps within
- * {@link ASSIGNED_STAR_MAX_DELTA} ★ (same band as {@link pickBestChallengePlay}). Used so “Open in osu!” can launch
- * a specific map instead of only the whole set.
+ * {@link ASSIGNED_STAR_MAX_DELTA} ★ (same band as {@link pickBestChallengePlay}).
+ *
+ * Important: this function is used for *recommendations / opening in osu!* only. It must never return a map outside
+ * the accepted band, otherwise the UI can suggest a difficulty that “Submit from osu!” will later reject.
  */
 export function pickBeatmapIdForAssignedTier(beatmaps: unknown[], preferredStars: number | null): number | null {
   if (preferredStars == null || !Number.isFinite(preferredStars) || preferredStars <= 0) return null;
@@ -284,8 +286,8 @@ export function pickBeatmapIdForAssignedTier(beatmaps: unknown[], preferredStars
   }
   if (rows.length === 0) return null;
 
-  const inBand = rows.filter((r) => Math.abs(r.stars - preferredStars) <= ASSIGNED_STAR_MAX_DELTA);
-  const pool = inBand.length > 0 ? inBand : rows;
+  const pool = rows.filter((r) => Math.abs(r.stars - preferredStars) <= ASSIGNED_STAR_MAX_DELTA);
+  if (pool.length === 0) return null;
 
   let best: Row | null = null;
   for (const r of pool) {

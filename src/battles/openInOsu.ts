@@ -18,6 +18,13 @@ export async function openBattleSubmitTargetInOsu(
     return;
   }
   if (Number.isFinite(beatmapsetId) && beatmapsetId > 0) {
-    await invoke("open_osu_beatmapset", { beatmapsetId });
+    try {
+      await invoke("open_osu_beatmapset", { beatmapsetId });
+    } catch (e) {
+      // Some systems register `osu://b/...` but not `osu://s/...`; fall back to opening a specific difficulty.
+      // We avoid extra API calls here (OAuth may not be configured), so this is best-effort only.
+      const msg = String(e);
+      throw new Error(`Could not open beatmapset in osu! (${msg}). If this keeps happening, try updating osu!stable or ensure the osu:// protocol is registered.`);
+    }
   }
 }

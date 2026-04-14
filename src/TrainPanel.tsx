@@ -8,6 +8,7 @@ import {
   applyDifficultyFeelToBand,
   buildAutoQueueChunk,
   buildQueueFromCustomItems,
+  fetchAvgPpMapFixed,
   nextStarBand,
   softenStarBand,
 } from "./trainQueue";
@@ -71,6 +72,10 @@ function downloadTextFile(filename: string, text: string): void {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
 const MODE_OPTIONS_UI: NeuSelectOption[] = [...SEARCH_MODE_OPTIONS];
@@ -156,6 +161,79 @@ export function TrainPanel({
       pushToast("error", String(e));
     }
   }, [pushToast]);
+
+  const shiftCurrentDifficulty = useCallback(
+    async (dir: "easier" | "harder") => {
+      if (!session) return;
+      const cur = session.queue[session.currentIndex];
+      if (!cur) return;
+      setBusy(true);
+      try {
+        const raw = await invoke<unknown>("get_beatmapset", { beatmapsetId: cur.beatmapsetId });
+        const set = asRecord(raw);
+        const beatmaps = (set.beatmaps as Record<string, unknown>[]) || [];
+        const diffs = beatmaps
+          .filter((b) => b.mode === session.mode)
+          .map((b) => ({
+            id: Number(b.id),
+            stars: Number(b.difficulty_rating ?? 0),
+          }))
+          .filter((d) => Number.isFinite(d.id) && Number.isFinite(d.stars) && d.stars > 0)
+          .sort((a, b) => a.stars - b.stars);
+
+        if (diffs.length <= 1) {
+          pushToast("info", "No other difficulty for this mapset in this mode.");
+          return;
+        }
+
+        let idx = diffs.findIndex((d) => d.id === cur.beatmapId);
+        if (idx < 0) {
+          // Fallback: nearest stars to the current slot's star value.
+          let best = 0;
+          let bestDist = Number.POSITIVE_INFINITY;
+          for (let i = 0; i < diffs.length; i++) {
+            const dist = Math.abs(diffs[i].stars - cur.stars);
+            if (dist < bestDist) {
+              bestDist = dist;
+              best = i;
+            }
+          }
+          idx = best;
+        }
+
+        const nextIdx = dir === "easier" ? Math.max(0, idx - 1) : Math.min(diffs.length - 1, idx + 1);
+        if (nextIdx === idx) {
+          pushToast("info", dir === "easier" ? "Already at the easiest difficulty." : "Already at the hardest difficulty.");
+          return;
+        }
+
+        const next = diffs[nextIdx];
+        const avgMap = await fetchAvgPpMapFixed([next.id], session.mode);
+        const updated: TrainQueueItem = {
+          ...cur,
+          beatmapId: next.id,
+          stars: next.stars,
+          avgPp: avgMap.get(next.id) ?? null,
+        };
+
+        const q = [...session.queue];
+        q[session.currentIndex] = updated;
+        setSession({
+          ...session,
+          queue: q,
+          slotStartedAtMs: Date.now(),
+          difficultyFeel: null,
+        });
+        pushToast("success", dir === "easier" ? "Swapped to easier difficulty." : "Swapped to harder difficulty.");
+        void openOsuBeatmap(next.id);
+      } catch (e) {
+        pushToast("error", String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [session, pushToast, openOsuBeatmap],
+  );
 
   const startAuto = useCallback(async () => {
     if (meOsuId == null) {
@@ -735,45 +813,25 @@ export function TrainPanel({
           {session.source === "auto" && (
             <div
               className="train-feel-compact"
-              title="Adjusts the next auto-pick star band. Click again to clear."
+              title="Switches the current map to an easier/harder difficulty in the same set."
             >
               <div className="train-feel-compact__inner" role="group" aria-label="Star band nudge">
                 <button
                   type="button"
-                  className={`train-feel-btn ${session.difficultyFeel === "too_easy" ? "train-feel-btn--active" : ""}`}
+                  className="train-feel-btn"
                   disabled={busy}
-                  aria-label="Too easy — nudge next picks easier"
-                  aria-pressed={session.difficultyFeel === "too_easy"}
-                  onClick={() =>
-                    setSession((prev) =>
-                      prev && prev.source === "auto"
-                        ? {
-                            ...prev,
-                            difficultyFeel: prev.difficultyFeel === "too_easy" ? null : "too_easy",
-                          }
-                        : prev,
-                    )
-                  }
+                  aria-label="Switch to an easier difficulty"
+                  onClick={() => void shiftCurrentDifficulty("easier")}
                 >
                   <ArrowDown size={18} strokeWidth={2.25} aria-hidden />
                   <span className="train-feel-btn__text">Easier</span>
                 </button>
                 <button
                   type="button"
-                  className={`train-feel-btn ${session.difficultyFeel === "too_hard" ? "train-feel-btn--active" : ""}`}
+                  className="train-feel-btn"
                   disabled={busy}
-                  aria-label="Too hard — nudge next picks harder"
-                  aria-pressed={session.difficultyFeel === "too_hard"}
-                  onClick={() =>
-                    setSession((prev) =>
-                      prev && prev.source === "auto"
-                        ? {
-                            ...prev,
-                            difficultyFeel: prev.difficultyFeel === "too_hard" ? null : "too_hard",
-                          }
-                        : prev,
-                    )
-                  }
+                  aria-label="Switch to a harder difficulty"
+                  onClick={() => void shiftCurrentDifficulty("harder")}
                 >
                   <ArrowUp size={18} strokeWidth={2.25} aria-hidden />
                   <span className="train-feel-btn__text">Harder</span>

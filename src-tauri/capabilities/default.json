@@ -15,7 +15,8 @@
         { "url": "tel:*" },
         { "url": "http://*" },
         { "url": "https://*" },
-        { "url": "osu:*" }
+        { "url": "osu:*" },
+        { "url": "osu://*" }
       ]
     },
     "updater:default",

@@ -25,7 +25,14 @@ pub fn resolve_beatmap_directory(override_path: Option<&str>) -> Result<PathBuf,
         .join("osu!");
 
     if !osu_dir.is_dir() {
-        return Ok(default_songs_dir());
+        let d = default_songs_dir();
+        if d.is_dir() {
+            return Ok(d);
+        }
+        return Err(format!(
+            "Could not find an osu! Songs folder.\n\nExpected: {}\n\nIf you use osu!lazer, note that it does not have a `Songs` folder (it stores files under `%APPDATA%/osu`). osu-link currently imports beatmaps into osu!stable, so set the beatmap directory in Settings to your osu!stable Songs folder.",
+            d.display()
+        ));
     }
 
     let entries = fs::read_dir(&osu_dir).map_err(|e| e.to_string())?;
@@ -41,7 +48,15 @@ pub fn resolve_beatmap_directory(override_path: Option<&str>) -> Result<PathBuf,
         }
     }
 
-    Ok(default_songs_dir())
+    let d = default_songs_dir();
+    if d.is_dir() {
+        Ok(d)
+    } else {
+        Err(format!(
+            "Could not find an osu! Songs folder.\n\nExpected: {}\n\nIf you use osu!lazer, note that it does not have a `Songs` folder (it stores files under `%APPDATA%/osu`). osu-link currently imports beatmaps into osu!stable, so set the beatmap directory in Settings to your osu!stable Songs folder.",
+            d.display()
+        ))
+    }
 }
 
 fn read_beatmap_directory_from_cfg(path: &Path) -> Result<Option<PathBuf>, String> {

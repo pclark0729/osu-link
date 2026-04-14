@@ -203,9 +203,9 @@ describe("pickBeatmapIdForAssignedTier", () => {
     expect(pickBeatmapIdForAssignedTier(list, preferred)).toBe(11);
   });
 
-  it("when none in band, picks closest ★ overall", () => {
+  it("when none in band, returns null (avoid suggesting an invalid submit target)", () => {
     const list = [bm(1, 2), bm(2, 8)];
-    expect(pickBeatmapIdForAssignedTier(list, 5)).toBe(1);
+    expect(pickBeatmapIdForAssignedTier(list, 5)).toBeNull();
   });
 
   it("ignores non-osu and non-ranked", () => {

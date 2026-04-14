@@ -48,6 +48,12 @@ pub struct Settings {
     /// Mechanical-style click / type sounds for buttons and text fields (Web Audio).
     #[serde(default = "default_ui_sound_effects_enabled")]
     pub ui_sound_effects_enabled: bool,
+    /// When true, attempt to repair broken beatmap folders automatically after downloads/imports.
+    #[serde(default = "default_auto_repair_after_download")]
+    pub auto_repair_broken_beatmaps_after_download: bool,
+    /// When true, attempt to repair broken beatmap folders when the user clicks “Rescan Songs”.
+    #[serde(default = "default_auto_repair_on_rescan")]
+    pub auto_repair_broken_beatmaps_on_rescan: bool,
 }
 
 fn default_hotkey_focus_search() -> String {
@@ -78,6 +84,14 @@ fn default_ui_sound_effects_enabled() -> bool {
     true
 }
 
+fn default_auto_repair_after_download() -> bool {
+    false
+}
+
+fn default_auto_repair_on_rescan() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -96,6 +110,8 @@ impl Default for Settings {
             discord_control_session_token: None,
             discord_control_ws_url: None,
             ui_sound_effects_enabled: default_ui_sound_effects_enabled(),
+            auto_repair_broken_beatmaps_after_download: default_auto_repair_after_download(),
+            auto_repair_broken_beatmaps_on_rescan: default_auto_repair_on_rescan(),
         }
     }
 }

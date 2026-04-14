@@ -104,6 +104,8 @@ interface Settings {
   discordControlSessionToken: string | null;
   discordControlWsUrl: string | null;
   uiSoundEffectsEnabled: boolean;
+  autoRepairBrokenBeatmapsAfterDownload: boolean;
+  autoRepairBrokenBeatmapsOnRescan: boolean;
 }
 
 function mapSettingsFromRust(s: Settings): Settings {
@@ -123,6 +125,8 @@ function mapSettingsFromRust(s: Settings): Settings {
     discordControlSessionToken: s.discordControlSessionToken ?? null,
     discordControlWsUrl: s.discordControlWsUrl ?? null,
     uiSoundEffectsEnabled: s.uiSoundEffectsEnabled !== false,
+    autoRepairBrokenBeatmapsAfterDownload: Boolean(s.autoRepairBrokenBeatmapsAfterDownload),
+    autoRepairBrokenBeatmapsOnRescan: s.autoRepairBrokenBeatmapsOnRescan !== false,
   };
 }
 
@@ -154,6 +158,8 @@ function settingsToCmdPayload(s: Settings) {
         ? s.discordControlWsUrl.trim()
         : null,
     uiSoundEffectsEnabled: s.uiSoundEffectsEnabled,
+    autoRepairBrokenBeatmapsAfterDownload: s.autoRepairBrokenBeatmapsAfterDownload,
+    autoRepairBrokenBeatmapsOnRescan: s.autoRepairBrokenBeatmapsOnRescan,
   };
 }
 
@@ -405,6 +411,8 @@ export default function App() {
     discordControlSessionToken: null,
     discordControlWsUrl: null,
     uiSoundEffectsEnabled: true,
+    autoRepairBrokenBeatmapsAfterDownload: false,
+    autoRepairBrokenBeatmapsOnRescan: true,
   });
   /** Matches Rust `social_api_*` (saved settings + mDNS + default); null until loaded or non-Tauri. */
   const [effectiveSocialApiBaseUrl, setEffectiveSocialApiBaseUrl] = useState<string | null>(null);
@@ -696,6 +704,13 @@ export default function App() {
     const client = new PartyClient(defaultPartyWsUrlFromSettings(undefined), (ev) => {
       if (ev.kind === "state") setPartyState(ev.state);
       if (ev.kind === "beatmap_queued") {
+        if (!isTauri()) {
+          pushToastRef.current?.(
+            "info",
+            "Party queue updated. Auto-download/import runs only in the desktop app.",
+          );
+          return;
+        }
         const stN = partyClientRef.current?.getState();
         const msg = ev.msg;
         if (
@@ -790,8 +805,26 @@ export default function App() {
     } catch {
       setResolvedSongs("");
     }
+    if (isTauri() && settings.autoRepairBrokenBeatmapsOnRescan) {
+      try {
+        const r = await invoke<{
+          scanned: number;
+          broken: number;
+          repaired: number;
+          skipped: number;
+          failures: Array<{ folder: string; reason: string; beatmapsetId?: number | null }>;
+        }>("repair_broken_beatmaps");
+        if (r.broken > 0) {
+          const msg = `Repair: ${r.repaired}/${r.broken} fixed` + (r.failures?.length ? ` · ${r.failures.length} failed` : "");
+          pushToast(r.failures?.length ? "error" : "success", msg);
+        }
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        pushToast("error", `Repair failed: ${message}`);
+      }
+    }
     await reloadLocalLibrary();
-  }, [reloadLocalLibrary]);
+  }, [reloadLocalLibrary, settings.autoRepairBrokenBeatmapsOnRescan, pushToast]);
 
   const refreshEffectiveSocialApiBase = useCallback(async () => {
     if (!isTauri()) {

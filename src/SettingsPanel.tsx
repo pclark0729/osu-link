@@ -33,6 +33,8 @@ export type SettingsPanelState = {
   discordControlSessionToken: string | null;
   discordControlWsUrl: string | null;
   uiSoundEffectsEnabled: boolean;
+  autoRepairBrokenBeatmapsAfterDownload: boolean;
+  autoRepairBrokenBeatmapsOnRescan: boolean;
 };
 
 export function SettingsPanel({
@@ -460,6 +462,19 @@ export function SettingsPanel({
           <p className="hint">
             Songs: {resolvedSongs || "—"} · <strong>{localBeatmapsetCount}</strong> sets
           </p>
+          <div className="u-mb-3">
+            <label className="field field--checkbox u-mb-0">
+              <input
+                type="checkbox"
+                checked={settings.autoRepairBrokenBeatmapsOnRescan}
+                onChange={(e) =>
+                  setSettings({ ...settings, autoRepairBrokenBeatmapsOnRescan: e.target.checked })
+                }
+              />
+              <span>Auto-repair broken beatmaps on Rescan</span>
+            </label>
+            <p className="hint u-mb-0">If a folder is missing required files, osu-link will try to re-download it.</p>
+          </div>
           <div className="row-actions">
             <button type="button" className="secondary" disabled={!isTauri()} onClick={() => void refreshPaths()}>
               Rescan Songs

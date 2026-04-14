@@ -57,7 +57,7 @@ fn first_osu_path_in_folder(dir: &Path) -> Option<std::path::PathBuf> {
 
 const OSU_HEADER_READ_MAX: usize = 131_072;
 
-fn beatmapset_id_from_folder(dir: &Path, folder_name: &str) -> Option<i64> {
+fn beatmapset_id_from_folder_impl(dir: &Path, folder_name: &str) -> Option<i64> {
     if let Some(id) = beatmapset_id_from_folder_name(folder_name) {
         return Some(id);
     }
@@ -67,6 +67,13 @@ fn beatmapset_id_from_folder(dir: &Path, folder_name: &str) -> Option<i64> {
     let n = f.read(&mut buf).unwrap_or(0);
     buf.truncate(n);
     beatmapset_id_from_osu_header(&buf)
+}
+
+/// Best-effort beatmapset id detection for a Songs subfolder (folder name digits, then `.osu` header).
+///
+/// Used by cleanup/repair commands.
+pub fn beatmapset_id_from_folder(dir: &Path, folder_name: &str) -> Option<i64> {
+    beatmapset_id_from_folder_impl(dir, folder_name)
 }
 
 /// Scans the Songs folder: one beatmapset id per immediate child directory.
@@ -83,7 +90,7 @@ pub fn scan_local_beatmapset_ids(songs_dir: &Path) -> Result<Vec<i64>, String> {
         }
         let name = ent.file_name();
         let folder_name = name.to_string_lossy();
-        if let Some(id) = beatmapset_id_from_folder(&path, &folder_name) {
+        if let Some(id) = beatmapset_id_from_folder_impl(&path, &folder_name) {
             if id > 0 {
                 set.insert(id);
             }

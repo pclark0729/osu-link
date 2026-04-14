@@ -5,6 +5,7 @@ mod discord_control;
 mod party_discovery;
 mod import;
 mod local_library;
+mod repair;
 mod oauth;
 mod osu_api;
 mod paths;
@@ -209,6 +210,11 @@ fn get_local_beatmapset_ids() -> Result<Vec<i64>, String> {
     let s = load_settings();
     let dir = paths::resolve_beatmap_directory(s.beatmap_directory.as_deref())?;
     local_library::scan_local_beatmapset_ids(&dir)
+}
+
+#[tauri::command]
+async fn repair_broken_beatmaps() -> Result<repair::RepairSummary, String> {
+    repair::repair_broken_beatmaps().await
 }
 
 pub(crate) async fn download_and_import_impl(set_id: i64, no_video: bool) -> Result<String, String> {
@@ -517,6 +523,7 @@ pub fn run() {
             preview_beatmap_dir,
             get_local_beatmapset_ids,
             download_and_import,
+            repair_broken_beatmaps,
             load_collections_cmd,
             save_collections_cmd,
             social_api_get,
