@@ -134,6 +134,21 @@ export function isGlobalChallengeRules(rulesJson: unknown): boolean {
   return Boolean((obj as Record<string, unknown>).global);
 }
 
+/**
+ * When true, weighted submits use the player's median star rating from best scores as {@link pickBestChallengePlay}'s
+ * `preferredStars` (recent plays must fall within ±{@link ASSIGNED_STAR_MAX_DELTA}★). Matches 1v1 relative-PP battles
+ * without a fixed difficulty. Global challenges with difficulty "any" use this so the field is fair across skill bands.
+ */
+export function challengeUsesAssignedStarTier(
+  rulesJson: unknown,
+  beatmapId: number | null | undefined,
+  diffMode: ChallengeDifficultyMode,
+): boolean {
+  if (beatmapId != null && Number.isFinite(Number(beatmapId))) return false;
+  if (diffMode === "auto") return true;
+  return diffMode === "any" && isGlobalChallengeRules(rulesJson);
+}
+
 export function expectedPpAtStars(baselinePpPerStar: number | null, stars: number): number {
   const b =
     baselinePpPerStar != null && Number.isFinite(baselinePpPerStar) && baselinePpPerStar > 0

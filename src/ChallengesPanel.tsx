@@ -1,13 +1,15 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   ASSIGNED_STAR_MAX_DELTA,
   baselinePpPerStarFromBestScores,
+  challengeUsesAssignedStarTier,
   isGlobalChallengeRules,
   medianStarsFromBestScores,
   parseChallengeDifficultyMode,
   pickBestChallengePlay,
 } from "./challengeScoring";
+import { openChallengeInOsu } from "./challengeOpenInOsu";
 import type { ChallengeRow, ChallengeScoreRow } from "./challengeTypes";
 import { Clock } from "lucide-react";
 import { ChallengeStandingsLoadingSkeleton } from "./Skeleton";
@@ -53,9 +55,11 @@ function isUnweightedFlag(v: ChallengeScoreRow["is_unweighted"]): boolean {
 function challengeDiffSummary(
   fixedDiff: number | null,
   diffMode: ReturnType<typeof parseChallengeDifficultyMode>,
+  isGlobal: boolean,
 ): string {
   if (fixedDiff != null) return `Fixed #${fixedDiff}`;
-  if (diffMode === "auto") return "Auto ★";
+  if (diffMode === "auto") return "Auto tier";
+  if (isGlobal) return "Per-player tier";
   return "Any diff";
 }
 
@@ -122,6 +126,7 @@ export function ChallengesPanel({
   const [detailStandings, setDetailStandings] = useState<ChallengeScoreRow[] | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [openingChallengeOsuId, setOpeningChallengeOsuId] = useState<number | null>(null);
 
   const challengePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -215,6 +220,7 @@ export function ChallengesPanel({
     const fixedBeatmapId =
       challenge.beatmap_id != null && Number.isFinite(challenge.beatmap_id) ? challenge.beatmap_id : null;
     const diffMode = parseChallengeDifficultyMode(challenge.rules_json, challenge.beatmap_id);
+    const usesTier = challengeUsesAssignedStarTier(challenge.rules_json, challenge.beatmap_id, diffMode);
 
     const prevRow = challenges.find((c) => c.id === challengeId)?.my_standing ?? null;
     const prevRv =
@@ -231,7 +237,7 @@ export function ChallengesPanel({
       });
       const baseline = baselinePpPerStarFromBestScores(bestRaw);
       const preferredStars =
-        diffMode === "auto" && fixedBeatmapId == null ? medianStarsFromBestScores(bestRaw) : null;
+        fixedBeatmapId == null && usesTier ? medianStarsFromBestScores(bestRaw) : null;
       const recentRaw = await invoke<unknown>("osu_user_recent_scores", { userId: meId, limit: 100, mode: "osu" });
       const picked = pickBestChallengePlay(recentRaw, beatmapsetId, {
         fixedBeatmapId,
@@ -268,8 +274,8 @@ export function ChallengesPanel({
         isUnweighted: false,
       });
       let msg = `Submitted ${picked.pp.toFixed(0)}pp (${picked.rankValue.toFixed(2)}× vs your baseline) from osu! recent scores.`;
-      if (diffMode === "auto" && fixedBeatmapId == null && preferredStars != null) {
-        msg += ` Auto: ~${preferredStars.toFixed(1)}★ tier.`;
+      if (usesTier && fixedBeatmapId == null && preferredStars != null) {
+        msg += ` ~${preferredStars.toFixed(1)}★ tier.`;
       }
       if (prevRv != null && picked.rankValue > prevRv) {
         msg += ` (up from ${prevRv.toFixed(2)}×)`;
@@ -328,6 +334,21 @@ export function ChallengesPanel({
     [selfOsuId, detailStandingProfileNames, displayNameForOsu],
   );
 
+  const handleOpenChallengeInOsu = useCallback(
+    async (challenge: ChallengeRow) => {
+      if (!isTauri()) return;
+      setOpeningChallengeOsuId(challenge.id);
+      try {
+        await openChallengeInOsu({ challenge, meId });
+      } catch (e) {
+        onToast("error", String(e));
+      } finally {
+        setOpeningChallengeOsuId(null);
+      }
+    },
+    [meId, onToast],
+  );
+
   return (
     <div
       className={`social-section social-challenge-section social-challenge-view challenges-panel${
@@ -340,7 +361,8 @@ export function ChallengesPanel({
             Multiplayer challenges
           </h3>
           <p className="panel-sub panel-sub--tight battles-panel__lede challenges-panel__lede-short">
-            Open leaderboards on a ranked set — create with <strong>Open challenge</strong> above. Refreshes every ~15s.
+            Open leaderboards on a ranked set — create with <strong>Open challenge</strong> above. Use{" "}
+            <strong>Open in osu!</strong> on a card to launch the map. Refreshes every ~15s.
           </p>
         </div>
       ) : (
@@ -348,9 +370,10 @@ export function ChallengesPanel({
           <div className="challenges-panel__hero-text">
             <h3 className="challenges-panel__hero-title">Challenges</h3>
             <p className="challenges-panel__hero-desc">
-              Relative PP vs your PP/★ curve on a ranked set. Choose <strong>Any</strong> for the best relative play on
-              any difficulty, <strong>Auto</strong> to weight difficulties near your median ★ from best scores, or lock a
-              single map. Manual scores are unweighted. Updates every ~15s while this tab is visible.
+              Relative PP vs your PP/★ curve on a ranked set. <strong>Global + Any</strong> and <strong>Auto</strong> use a
+              per-player star band like 1v1 battles; friend-only <strong>Any</strong> still accepts any difficulty. Lock one
+              difficulty for everyone, or use <strong>Open in osu!</strong> on a card (desktop) to jump to the right map.
+              Manual scores are unweighted. Updates every ~15s while this tab is visible.
             </p>
           </div>
         </header>
@@ -398,22 +421,20 @@ export function ChallengesPanel({
               <span className="social-challenge-card__title-text">{titleMain}</span>
             );
 
-            const diffSummary = challengeDiffSummary(fixedDiff, diffMode);
-            const sublineBits = [
-              Number.isFinite(dl) ? `Ends ${deadlineLabel}` : null,
-              `${pcLabel} player${pcLabel === 1 ? "" : "s"}`,
-              isGlobal ? "Global" : null,
-              diffSummary,
-            ].filter(Boolean);
+            const diffSummary = challengeDiffSummary(fixedDiff, diffMode, isGlobal);
+            const usesTier = challengeUsesAssignedStarTier(c.rules_json, c.beatmap_id, diffMode);
+            const sublineBits = [Number.isFinite(dl) ? `Ends ${deadlineLabel}` : null].filter(Boolean);
+            const showOpenOsu = isTauri() && Number.isFinite(setId) && setId > 0;
+            const openingThis = openingChallengeOsuId === id;
 
             return (
               <li
                 key={id}
-                className="social-challenge-card social-challenge-card--calm"
+                className="social-challenge-card social-challenge-card--calm social-challenge-card--dense"
                 style={{ animationDelay: `${Math.min(idx, 6) * 0.02}s` }}
               >
                 <div className="social-challenge-card__accent" aria-hidden />
-                <div className="social-challenge-card__head">
+                <div className="social-challenge-card__head social-challenge-card__head--dense">
                   <div className="social-challenge-card__title-block">
                     {artistLine ? (
                       <span className="social-challenge-card__artist">{artistLine}</span>
@@ -423,17 +444,34 @@ export function ChallengesPanel({
                       <span className="social-challenge-card__mapper">mapped by {mapperLine}</span>
                     ) : null}
                   </div>
-                  <span className="challenges-pill challenges-pill--time" title={deadlineLabel}>
-                    <Clock size={13} strokeWidth={2.25} aria-hidden />
-                    {formatTimeRemaining(remaining)}
-                  </span>
+                  <div className="social-challenge-card__head-pills">
+                    {!windowOpen ? (
+                      <span className="challenges-pill challenges-pill--ended">Ended</span>
+                    ) : null}
+                    <span className="challenges-pill challenges-pill--time" title={deadlineLabel}>
+                      <Clock size={13} strokeWidth={2.25} aria-hidden />
+                      {formatTimeRemaining(remaining)}
+                    </span>
+                  </div>
                 </div>
-                <p className="social-challenge-card__subline" title={sublineBits.join(" · ")}>
-                  <span className="social-challenge-card__subline-inner">{sublineBits.join(" · ")}</span>
-                  <span className="social-challenge-card__id-muted">#{id}</span>
-                </p>
-                {!windowOpen ? (
-                  <span className="challenges-pill challenges-pill--ended social-challenge-card__ended-strip">Ended</span>
+                <div className="social-challenge-card__chip-row" aria-label="Challenge meta">
+                  {isGlobal ? <span className="challenges-pill challenges-pill--global-chip">Global</span> : null}
+                  <span className="challenges-pill challenges-pill--ghost">{diffSummary}</span>
+                  <span className="challenges-pill challenges-pill--ghost">
+                    {pcLabel} player{pcLabel === 1 ? "" : "s"}
+                  </span>
+                  <span className="social-challenge-card__id-chip">#{id}</span>
+                </div>
+                {sublineBits.length > 0 ? (
+                  <p className="social-challenge-card__subline social-challenge-card__subline--tight" title={sublineBits.join(" · ")}>
+                    <span className="social-challenge-card__subline-inner">{sublineBits.join(" · ")}</span>
+                  </p>
+                ) : null}
+                {usesTier && fixedDiff == null && windowOpen ? (
+                  <p className="hint social-challenge-card__tier-note">
+                    Each player's ranked submit must be within ±{ASSIGNED_STAR_MAX_DELTA}★ of their osu! profile tier
+                    (same rule as 1v1 battles).
+                  </p>
                 ) : null}
                 {standingsTop.length > 0 && (
                   <details className="social-challenge-card__preview-details">
@@ -456,51 +494,66 @@ export function ChallengesPanel({
                     No submission yet — play the set in osu!, then submit.
                   </p>
                 )}
-                <div className="social-challenge-card__actions social-challenge-card__actions--calm">
-                  {isGlobal ? (
-                    <span className="hint social-challenge-card__everyone-badge">Everyone</span>
-                  ) : !iAmIn ? (
+                <div className="social-challenge-card__actions social-challenge-card__actions--toolbar">
+                  <div className="social-challenge-card__actions-primary">
+                    {isGlobal ? (
+                      <span className="challenges-pill challenges-pill--everyone">Open to all</span>
+                    ) : !iAmIn ? (
+                      <button
+                        type="button"
+                        className="primary small-btn social-challenge-card__btn-compact"
+                        disabled={busy || !windowOpen}
+                        onClick={() => void joinChallenge(id)}
+                      >
+                        Join
+                      </button>
+                    ) : (
+                      <button type="button" className="secondary small-btn social-challenge-card__btn-compact" disabled>
+                        In
+                      </button>
+                    )}
+                    {canSubmit && meId != null && (
+                      <button
+                        type="button"
+                        className="primary small-btn social-challenge-card__btn-compact"
+                        disabled={busy}
+                        onClick={() => void submitChallengeFromOsu(c)}
+                      >
+                        Submit
+                      </button>
+                    )}
+                  </div>
+                  <div className="social-challenge-card__actions-secondary">
+                    {showOpenOsu ? (
+                      <button
+                        type="button"
+                        className="secondary small-btn social-challenge-card__btn-compact"
+                        disabled={busy || openingThis}
+                        title="Opens osu!stable to this map or your tier on the set"
+                        onClick={() => void handleOpenChallengeInOsu(c)}
+                      >
+                        {openingThis ? "Opening…" : "Open in osu!"}
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      className="primary small-btn"
-                      disabled={busy || !windowOpen}
-                      onClick={() => void joinChallenge(id)}
-                    >
-                      Join
-                    </button>
-                  ) : (
-                    <button type="button" className="secondary small-btn" disabled>
-                      Joined
-                    </button>
-                  )}
-                  {canSubmit && meId != null && (
-                    <button
-                      type="button"
-                      className="primary small-btn"
+                      className="secondary small-btn social-challenge-card__btn-compact"
                       disabled={busy}
-                      onClick={() => void submitChallengeFromOsu(c)}
+                      onClick={() => setDetailChallengeId(id)}
                     >
-                      Submit from osu!
+                      Board
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="secondary small-btn"
-                    disabled={busy}
-                    onClick={() => setDetailChallengeId(id)}
-                  >
-                    Standings
-                  </button>
-                  {canSubmit && (
-                    <button
-                      type="button"
-                      className="secondary small-btn"
-                      disabled={busy}
-                      onClick={() => openManualScoreModal(id)}
-                    >
-                      Manual…
-                    </button>
-                  )}
+                    {canSubmit && (
+                      <button
+                        type="button"
+                        className="secondary small-btn social-challenge-card__btn-compact"
+                        disabled={busy}
+                        onClick={() => openManualScoreModal(id)}
+                      >
+                        Manual
+                      </button>
+                    )}
+                  </div>
                 </div>
               </li>
             );

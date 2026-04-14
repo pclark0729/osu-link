@@ -88,7 +88,6 @@ export function BattleNewFlow({
     { value: "auto", label: "Auto (map near your ★ profile)" },
   ]);
   const [chDiffValue, setChDiffValue] = useState("");
-  const [chGlobal, setChGlobal] = useState(false);
   const pendingRematchBmRef = useRef<number | null>(null);
 
   const isChallenge = flowKind === "challenge";
@@ -456,8 +455,8 @@ export function BattleNewFlow({
       if (battlePick.creator.trim()) chDisplay.creator = battlePick.creator.trim();
       const rulesJson: Record<string, unknown> = {
         display: chDisplay,
+        global: true,
       };
-      if (chGlobal) rulesJson.global = true;
       const body: Record<string, unknown> = {
         beatmapsetId: battlePick.id,
         deadlineMs,
@@ -480,7 +479,6 @@ export function BattleNewFlow({
       setBattleMapResults([]);
       setBattlePick(null);
       setChDiffValue("");
-      setChGlobal(false);
       setChDeadlinePreset("");
       setChDeadlineCustom("");
       setStep(0);
@@ -543,9 +541,9 @@ export function BattleNewFlow({
             Open challenge
           </button>
         </div>
-        <p className="hint battle-flow__kind-hint">
+               <p className="hint battle-flow__kind-hint">
           {isChallenge
-            ? "Leaderboard on a ranked set — players join (or use Global so everyone can submit). Relative PP scoring."
+            ? "Global leaderboard on a ranked set — anyone signed in can submit without joining first. Relative PP scoring."
             : "Challenge one friend on a set — winner when the window ends or both submit."}
         </p>
 
@@ -737,18 +735,10 @@ export function BattleNewFlow({
                       onChange={(v) => setChDiffValue(v)}
                     />
                   </label>
-                  <label className="field field--checkbox battle-flow__global-chk">
-                    <input
-                      type="checkbox"
-                      checked={chGlobal}
-                      disabled={uiLocked}
-                      onChange={(e) => setChGlobal(e.target.checked)}
-                    />
-                    <span>Global — everyone can submit without joining first</span>
-                  </label>
                   <p className="hint battle-flow__tier-hint">
-                    Relative PP vs each player’s curve. <strong>Any</strong> picks the best qualifying play on the set;{" "}
-                    <strong>Auto</strong> prefers difficulties near your median ★ from top plays.
+                    Open challenges are <strong>global</strong> (no join step). Relative PP vs each player&apos;s curve:{" "}
+                    <strong>Auto</strong> and <strong>Any</strong> both use the same per-player star band as 1v1 battles (
+                    ±{ASSIGNED_STAR_MAX_DELTA}★).
                   </p>
                   {!battlePick && <p className="hint">Go back to the Map step to select a beatmap set.</p>}
                 </>
@@ -843,15 +833,15 @@ export function BattleNewFlow({
                     <strong>Difficulty</strong>
                     <span>
                       {chDiffValue === "auto"
-                        ? "Auto (near your ★ profile)"
+                        ? "Auto — star band from top plays"
                         : !chDiffValue.trim()
-                          ? "Any difficulty"
+                          ? "Any — per-player star band (like 1v1)"
                           : (chDiffOptions.find((o) => o.value === chDiffValue)?.label ?? chDiffValue)}
                     </span>
                   </li>
                   <li>
-                    <strong>Global</strong>
-                    <span>{chGlobal ? "Yes — open to all players" : "No — join required"}</span>
+                    <strong>Visibility</strong>
+                    <span>Global — anyone signed in can submit (no join)</span>
                   </li>
                   <li>
                     <strong>Ends</strong>

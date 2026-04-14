@@ -3,6 +3,7 @@ import {
   ASSIGNED_STAR_MAX_DELTA,
   baselinePpPerStarFromBestScores,
   challengeRankValue,
+  challengeUsesAssignedStarTier,
   expectedPpAtStars,
   FALLBACK_PP_PER_STAR,
   medianStarsFromBestScores,
@@ -173,6 +174,24 @@ describe("isGlobalChallengeRules", () => {
 
   it("parses JSON string", () => {
     expect(isGlobalChallengeRules('{"global":true}')).toBe(true);
+  });
+});
+
+describe("challengeUsesAssignedStarTier", () => {
+  it("is false when a fixed beatmap is set", () => {
+    expect(challengeUsesAssignedStarTier({ difficultyMode: "any", global: true }, 99, "any")).toBe(false);
+  });
+
+  it("is true for auto without fixed map", () => {
+    expect(challengeUsesAssignedStarTier({ difficultyMode: "auto" }, null, "auto")).toBe(true);
+  });
+
+  it("is true for global any", () => {
+    expect(challengeUsesAssignedStarTier({ difficultyMode: "any", global: true }, null, "any")).toBe(true);
+  });
+
+  it("is false for friend-only any", () => {
+    expect(challengeUsesAssignedStarTier({ difficultyMode: "any" }, null, "any")).toBe(false);
   });
 });
 

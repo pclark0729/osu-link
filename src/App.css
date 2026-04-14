@@ -6423,6 +6423,27 @@ button.social-tab {
   background: rgba(80, 120, 255, 0.12);
 }
 
+.challenges-pill--ghost {
+  font-weight: 600;
+  opacity: 0.92;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.challenges-pill--global-chip {
+  color: var(--accent-2, #a8c8ff);
+  border-color: rgba(120, 160, 255, 0.3);
+  background: rgba(80, 120, 255, 0.1);
+}
+
+.challenges-pill--everyone {
+  font-weight: 600;
+  color: var(--muted);
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: transparent;
+}
+
 .challenges-panel--embedded .challenges-panel__compose {
   margin-top: 0.35rem;
 }
@@ -6442,7 +6463,7 @@ button.social-tab {
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(17.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
   gap: 0.65rem;
 }
 
@@ -6456,6 +6477,74 @@ button.social-tab {
 
 .social-challenge-card--calm {
   padding: 0.65rem 0.75rem;
+}
+
+.social-challenge-card--dense {
+  gap: 0.35rem;
+  padding: 0.55rem 0.65rem 0.5rem;
+  padding-top: 0.62rem;
+}
+
+.social-challenge-card__head--dense {
+  align-items: flex-start;
+}
+
+.social-challenge-card__head-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.social-challenge-card__chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.05rem;
+}
+
+.social-challenge-card__id-chip {
+  margin-left: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.social-challenge-card__subline--tight {
+  margin: 0;
+  font-size: 0.74rem;
+}
+
+.social-challenge-card__tier-note {
+  margin: 0.05rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.social-challenge-card__actions--toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.social-challenge-card__actions-primary,
+.social-challenge-card__actions-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  align-items: center;
+}
+
+.social-challenge-card__btn-compact {
+  padding: 0.22rem 0.5rem;
+  font-size: 0.76rem;
 }
 
 .social-challenge-card__subline {
@@ -7494,10 +7583,6 @@ button.social-tab {
   margin: 0 0 0.65rem;
   font-size: 0.82rem;
   line-height: 1.35;
-}
-
-.battle-flow__global-chk {
-  margin-top: 0.35rem;
 }
 
 .battle-flow__steps {
